@@ -1,0 +1,70 @@
+%YAML 1.1
+%TAG !u! tag:unity3d.com,2011:
+--- !u!114 &11400000
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 0}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: 0ca09f558f7648143a2006d5ffdc218e, type: 3}
+  m_Name: AggressiveAccusationLieDialogueSet
+  m_EditorClassIdentifier: Assembly-CSharp::Game.Minigames.LieDialogueSet
+  _dialogueSetId: aggressive_accusation
+  _suspicionPenaltyPerRepeat: 0.1
+  _suspicionMinMultiplier: 0.5
+  _defaultResultPassStepId: aggressive_pass_end
+  _defaultResultFailStepId: aggressive_fail_challenge
+  _defaultPostPassLine: ""
+  _defaultPostFailLine: ""
+  _steps:
+  - _stepId: intro
+    _promptText: "Stop right there. I saw you coming out of a locked room. Talk."
+    _answers:
+    - _answerId: aggr_maintenance_leak
+      _answerText: "Maintenance keycard. Emergency leak check."
+      _zoneWidthMultiplier: 1.1
+      _followUpText: "You do not look maintenance."
+      _branchHook: maintenance_leak
+      _nextStepId: ""
+    - _answerId: aggr_manifest
+      _answerText: "Supervisor sent me to grab a manifest."
+      _zoneWidthMultiplier: 0.95
+      _followUpText: "Then you can name the supervisor."
+      _branchHook: manifest
+      _nextStepId: ""
+    - _answerId: aggr_noise_check
+      _answerText: "I heard a noise and checked it."
+      _zoneWidthMultiplier: 0.75
+      _followUpText: "Convenient story."
+      _branchHook: noise_check
+      _nextStepId: ""
+  - _stepId: aggressive_pass_end
+    _promptText: "You are lucky your timing checks out. Move."
+    _answers: []
+  - _stepId: aggressive_fail_challenge
+    _promptText: "You are lying. Last chance: where is the missing bag?"
+    _answers:
+    - _answerId: aggr_fail_janitor_cart
+      _answerText: "In the janitor cart by loading bay."
+      _zoneWidthMultiplier: 1
+      _followUpText: "We will verify that. Do not move."
+      _branchHook: fail_janitor_cart
+      _nextStepId: aggressive_fail_end
+    - _answerId: aggr_fail_never_touched
+      _answerText: "I never touched any bag."
+      _zoneWidthMultiplier: 1
+      _followUpText: "Then explain the camera angle."
+      _branchHook: fail_never_touched
+      _nextStepId: aggressive_fail_end
+    - _answerId: aggr_fail_already_gone
+      _answerText: "It was already gone when I arrived."
+      _zoneWidthMultiplier: 1
+      _followUpText: "Save it for the report."
+      _branchHook: fail_already_gone
+      _nextStepId: aggressive_fail_end
+  - _stepId: aggressive_fail_end
+    _promptText: "Detained. Face the wall."
+    _answers: []

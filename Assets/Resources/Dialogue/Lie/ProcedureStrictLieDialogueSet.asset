@@ -1,0 +1,70 @@
+%YAML 1.1
+%TAG !u! tag:unity3d.com,2011:
+--- !u!114 &11400000
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 0}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: 0ca09f558f7648143a2006d5ffdc218e, type: 3}
+  m_Name: ProcedureStrictLieDialogueSet
+  m_EditorClassIdentifier: Assembly-CSharp::Game.Minigames.LieDialogueSet
+  _dialogueSetId: procedure_strict
+  _suspicionPenaltyPerRepeat: 0.09
+  _suspicionMinMultiplier: 0.55
+  _defaultResultPassStepId: strict_pass_verify
+  _defaultResultFailStepId: strict_fail_end
+  _defaultPostPassLine: ""
+  _defaultPostFailLine: ""
+  _steps:
+  - _stepId: intro
+    _promptText: "Badge check. You crossed a restricted line. State your task."
+    _answers:
+    - _answerId: strict_doc_pickup
+      _answerText: "Document pickup for accounting."
+      _zoneWidthMultiplier: 1.05
+      _followUpText: "Accounting requests should pass through me."
+      _branchHook: doc_pickup
+      _nextStepId: ""
+    - _answerId: strict_escort_crate
+      _answerText: "I was told to escort a delivery crate."
+      _zoneWidthMultiplier: 0.95
+      _followUpText: "No crate is cleared this hour."
+      _branchHook: escort_crate
+      _nextStepId: ""
+    - _answerId: strict_sanitize_markers
+      _answerText: "I was sanitizing spill markers."
+      _zoneWidthMultiplier: 0.85
+      _followUpText: "Spill markers are day crew work."
+      _branchHook: sanitize_markers
+      _nextStepId: ""
+  - _stepId: strict_pass_verify
+    _promptText: "Recite the door code suffix for this wing."
+    _answers:
+    - _answerId: strict_code_73
+      _answerText: "Seven-three."
+      _zoneWidthMultiplier: 1
+      _followUpText: "Correct enough. Move along."
+      _branchHook: code_73
+      _nextStepId: strict_pass_end
+    - _answerId: strict_code_91
+      _answerText: "Nine-one."
+      _zoneWidthMultiplier: 1
+      _followUpText: "Close. I will let it slide once."
+      _branchHook: code_91
+      _nextStepId: strict_pass_end
+    - _answerId: strict_no_code
+      _answerText: "I was never given one."
+      _zoneWidthMultiplier: 1
+      _followUpText: "Then stay with me."
+      _branchHook: no_code
+      _nextStepId: strict_fail_end
+  - _stepId: strict_pass_end
+    _promptText: "Proceed. Report to checkpoint B after."
+    _answers: []
+  - _stepId: strict_fail_end
+    _promptText: "Protocol breach. You are coming with me."
+    _answers: []

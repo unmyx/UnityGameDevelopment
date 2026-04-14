@@ -1,0 +1,49 @@
+%YAML 1.1
+%TAG !u! tag:unity3d.com,2011:
+--- !u!114 &11400000
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 0}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: 0ca09f558f7648143a2006d5ffdc218e, type: 3}
+  m_Name: DefaultLieDialogueSet
+  m_EditorClassIdentifier: Assembly-CSharp::Game.Minigames.LieDialogueSet
+  _dialogueSetId: default
+  _suspicionPenaltyPerRepeat: 0.08
+  _suspicionMinMultiplier: 0.6
+  _defaultResultPassStepId: 
+  _defaultResultFailStepId: 
+  _defaultPostPassLine: 
+  _defaultPostFailLine: 
+  _steps:
+  - _stepId: intro
+    _promptText: Hey! What are you doing in here?!
+    _answers:
+    - _answerId: excuse_bathroom
+      _answerText: I'm just going to the bathroom.
+      _zoneWidthMultiplier: 1.2
+      _followUpText: Alright, make it quick.
+      _branchHook: bathroom
+      _nextStepId: after_pass
+    - _answerId: excuse_find_boss
+      _answerText: I'm looking for the boss, can you tell me where he is?
+      _zoneWidthMultiplier: 1
+      _followUpText: The boss is busy. Move along.
+      _branchHook: find_boss
+      _nextStepId: after_pass
+    - _answerId: excuse_passing_by
+      _answerText: I'm just passing by.
+      _zoneWidthMultiplier: 0.8
+      _followUpText: Then keep moving.
+      _branchHook: passing_by
+      _nextStepId: after_pass
+  - _stepId: after_pass
+    _promptText: Fine. Don't cause trouble.
+    _answers: []
+  - _stepId: after_fail
+    _promptText: I don't believe you. You're coming with me.
+    _answers: []

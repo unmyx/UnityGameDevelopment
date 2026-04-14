@@ -1,0 +1,70 @@
+%YAML 1.1
+%TAG !u! tag:unity3d.com,2011:
+--- !u!114 &11400000
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 0}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: 0ca09f558f7648143a2006d5ffdc218e, type: 3}
+  m_Name: CalmSuspicionLieDialogueSet
+  m_EditorClassIdentifier: Assembly-CSharp::Game.Minigames.LieDialogueSet
+  _dialogueSetId: calm_suspicion
+  _suspicionPenaltyPerRepeat: 0.06
+  _suspicionMinMultiplier: 0.65
+  _defaultResultPassStepId: calm_pass_follow
+  _defaultResultFailStepId: calm_fail_end
+  _defaultPostPassLine: ""
+  _defaultPostFailLine: ""
+  _steps:
+  - _stepId: intro
+    _promptText: "Easy there. You do not work this shift. Why are you near the storage lockers?"
+    _answers:
+    - _answerId: calm_mop_refill
+      _answerText: "I got sent for a mop refill."
+      _zoneWidthMultiplier: 1.15
+      _followUpText: "Then you should know where the supply sink is."
+      _branchHook: mop_refill
+      _nextStepId: ""
+    - _answerId: calm_barcode_check
+      _answerText: "Inventory asked me to verify a barcode."
+      _zoneWidthMultiplier: 1
+      _followUpText: "Inventory usually warns me first."
+      _branchHook: barcode_check
+      _nextStepId: ""
+    - _answerId: calm_wrong_turn
+      _answerText: "Wrong turn. I was heading to the break room."
+      _zoneWidthMultiplier: 0.85
+      _followUpText: "Break room is the other wing."
+      _branchHook: wrong_turn
+      _nextStepId: ""
+  - _stepId: calm_pass_follow
+    _promptText: "Alright, one more thing: what section are you assigned to?"
+    _answers:
+    - _answerId: calm_pass_north_hall
+      _answerText: "North hall, night cleanup."
+      _zoneWidthMultiplier: 1
+      _followUpText: "Fine. Keep your head down."
+      _branchHook: pass_north_hall
+      _nextStepId: calm_pass_end
+    - _answerId: calm_pass_loading_dock
+      _answerText: "Loading dock rotation."
+      _zoneWidthMultiplier: 1
+      _followUpText: "Dock is closed. Do not drift again."
+      _branchHook: pass_loading_dock
+      _nextStepId: calm_pass_end
+    - _answerId: calm_pass_float_crew
+      _answerText: "Temporary float crew."
+      _zoneWidthMultiplier: 1
+      _followUpText: "Then report in after this."
+      _branchHook: pass_float_crew
+      _nextStepId: calm_pass_end
+  - _stepId: calm_pass_end
+    _promptText: "Go. No detours."
+    _answers: []
+  - _stepId: calm_fail_end
+    _promptText: "No. Hands where I can see them."
+    _answers: []
