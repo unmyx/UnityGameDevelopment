@@ -1077,8 +1077,7 @@ namespace Game.Core
                 return false;
             }
 
-            // Consume tracker up front so repeated interactions cannot duplicate sale payout.
-            List<StolenLootEntryData> trackedLootSnapshot = ConsumeDayStolenLoot();
+            List<StolenLootEntryData> trackedLootSnapshot = GetStolenLootThisDaySnapshot();
             if (trackedLootSnapshot == null || trackedLootSnapshot.Count == 0)
             {
                 return true;
@@ -1086,6 +1085,7 @@ namespace Game.Core
 
             int totalRemoved = 0;
             int totalPayout = 0;
+            List<StolenLootEntryData> remainingTrackedLoot = new List<StolenLootEntryData>(trackedLootSnapshot.Count);
 
             for (int i = 0; i < trackedLootSnapshot.Count; i++)
             {
@@ -1103,18 +1103,28 @@ namespace Game.Core
                 }
 
                 int removedCount = _inventorySystem.RemoveItemsByItemId(normalizedItemId, requestedCount);
-                if (removedCount <= 0)
+                if (removedCount > 0)
                 {
-                    continue;
+                    totalRemoved += removedCount;
+                    int unitPrice = GetStolenLootSellPrice(normalizedItemId);
+                    if (unitPrice > 0)
+                    {
+                        totalPayout += removedCount * unitPrice;
+                    }
                 }
 
-                totalRemoved += removedCount;
-                int unitPrice = GetStolenLootSellPrice(normalizedItemId);
-                if (unitPrice > 0)
+                int remainingCount = Mathf.Max(0, requestedCount - removedCount);
+                if (remainingCount > 0)
                 {
-                    totalPayout += removedCount * unitPrice;
+                    remainingTrackedLoot.Add(new StolenLootEntryData
+                    {
+                        itemId = normalizedItemId,
+                        count = remainingCount
+                    });
                 }
             }
+
+            RestoreStolenLootThisDayFromSave(remainingTrackedLoot);
 
             if (totalPayout > 0)
             {
@@ -1298,6 +1308,22 @@ namespace Game.Core
             _runFailed = true;
             _currentRunPhase = RunPhase.GameOver;
             _runFailedReason = string.IsNullOrWhiteSpace(reason) ? string.Empty : reason.Trim();
+
+            if (TryBuildSaveContext(out SaveManager.SaveContext saveContext, out string saveContextFailureReason))
+            {
+                if (!SaveManager.Save(saveContext))
+                {
+                    Debug.LogWarning(
+                        "[GameManager] Failed to persist fail-state snapshot before routing to Menu.",
+                        this);
+                }
+            }
+            else
+            {
+                Debug.LogWarning(
+                    $"[GameManager] Could not persist fail-state before routing to Menu: {saveContextFailureReason}",
+                    this);
+            }
 
             _hasRoutedAfterFailure = false;
             TryRouteToFailureTerminalScene();

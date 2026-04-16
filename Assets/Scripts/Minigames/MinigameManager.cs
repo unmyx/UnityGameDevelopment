@@ -15,9 +15,12 @@ namespace Game.Minigames
         [SerializeField] private Canvas _cleaningCanvas;
         [SerializeField] private Canvas _weldingCanvas;
 
-        private const string MissingCanvasErrorMessage =
-            "[MinigameManager] Missing required minigame canvas references. " +
-            "Assign CleaningCanvas and WeldingCanvas explicitly in the scene setup.";
+        private const string CleaningMinigameId = "cleaning";
+        private const string WeldingMinigameId = "welding";
+        private const string MissingCleaningCanvasErrorMessage =
+            "[MinigameManager] Cannot start cleaning minigame: missing CleaningCanvas reference in the active scene.";
+        private const string MissingWeldingCanvasErrorMessage =
+            "[MinigameManager] Cannot start welding minigame: missing WeldingCanvas reference in the active scene.";
 
         private static MinigameManager _instance;
         private static int _managerLifetimeSequence;
@@ -43,12 +46,6 @@ namespace Game.Minigames
             _instance = this;
             _managerLifetimeScope = ++_managerLifetimeSequence;
 
-            if (!ValidateRequiredCanvases())
-            {
-                enabled = false;
-                return;
-            }
-
             EnsureMinigameCanvasesHidden();
             SceneManager.sceneLoaded += OnSceneLoaded;
         }
@@ -58,6 +55,7 @@ namespace Game.Minigames
             if (_instance == this)
             {
                 SceneManager.sceneLoaded -= OnSceneLoaded;
+                _instance = null;
             }
         }
 
@@ -97,7 +95,7 @@ namespace Game.Minigames
                 return null;
             }
 
-            if (!ValidateRequiredCanvases())
+            if (!ValidateCanvasRequirements(typeof(T), data))
             {
                 return null;
             }
@@ -150,7 +148,7 @@ namespace Game.Minigames
                 return null;
             }
 
-            if (!ValidateRequiredCanvases())
+            if (!ValidateCanvasRequirements(minigame.GetType(), data))
             {
                 return null;
             }
@@ -280,35 +278,60 @@ namespace Game.Minigames
 
         private void OnSceneLoaded(Scene scene, LoadSceneMode mode)
         {
-            if (!ValidateRequiredCanvases())
-            {
-                enabled = false;
-                return;
-            }
-
             EnsureMinigameCanvasesHidden();
         }
 
         private void EnsureMinigameCanvasesHidden()
         {
-            if (!ValidateRequiredCanvases())
+            if (_cleaningCanvas != null)
             {
-                return;
+                _cleaningCanvas.enabled = false;
             }
 
-            _cleaningCanvas.enabled = false;
-            _weldingCanvas.enabled = false;
+            if (_weldingCanvas != null)
+            {
+                _weldingCanvas.enabled = false;
+            }
         }
 
-        private bool ValidateRequiredCanvases()
+        private bool ValidateCanvasRequirements(System.Type minigameType, MinigameData data)
         {
-            if (_cleaningCanvas != null && _weldingCanvas != null)
+            bool requiresCleaningCanvas = RequiresCleaningCanvas(minigameType, data);
+            bool requiresWeldingCanvas = RequiresWeldingCanvas(minigameType, data);
+
+            if (requiresCleaningCanvas && _cleaningCanvas == null)
+            {
+                Debug.LogError(MissingCleaningCanvasErrorMessage, this);
+                return false;
+            }
+
+            if (requiresWeldingCanvas && _weldingCanvas == null)
+            {
+                Debug.LogError(MissingWeldingCanvasErrorMessage, this);
+                return false;
+            }
+
+            return true;
+        }
+
+        private static bool RequiresCleaningCanvas(System.Type minigameType, MinigameData data)
+        {
+            if (minigameType == typeof(CleaningMinigame))
             {
                 return true;
             }
 
-            Debug.LogError(MissingCanvasErrorMessage, this);
-            return false;
+            return string.Equals(data?.minigameId, CleaningMinigameId, System.StringComparison.Ordinal);
+        }
+
+        private static bool RequiresWeldingCanvas(System.Type minigameType, MinigameData data)
+        {
+            if (minigameType == typeof(WeldingFillMinigame))
+            {
+                return true;
+            }
+
+            return string.Equals(data?.minigameId, WeldingMinigameId, System.StringComparison.Ordinal);
         }
 
         private void WarnIfDuplicateTerminalFlow(string incomingFlowType, MinigameResult result)

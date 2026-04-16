@@ -71,7 +71,17 @@ namespace Game.Inventory
             }
 
             _instance = this;
+            DetachFromParentIfNeeded();
+            DontDestroyOnLoad(gameObject);
             EnsureInitialized();
+        }
+
+        private void DetachFromParentIfNeeded()
+        {
+            if (transform.parent != null)
+            {
+                transform.SetParent(null, true);
+            }
         }
 
         private void Start()

@@ -388,7 +388,6 @@ namespace Game.Systems
                             return;
                         }
 
-                        hasCaughtPlayer = true;
                         Log("Player caught.");
                         TriggerLieMinigame();
                         return;
@@ -621,7 +620,6 @@ namespace Game.Systems
                     return;
                 }
 
-                hasCaughtPlayer = true;
                 Log("Player caught.");
                 TriggerLieMinigame();
             }
@@ -647,6 +645,7 @@ namespace Game.Systems
                 IMinigame active = manager.StartMinigame<LieMinigame>(data);
                 if (active != null)
                 {
+                    hasCaughtPlayer = true;
                     _awaitingMinigameEnd = true;
                     triggeredMinigame = true;
 
@@ -663,11 +662,17 @@ namespace Game.Systems
                 }
                 else
                 {
+                    hasCaughtPlayer = false;
+                    _awaitingMinigameEnd = false;
+                    triggeredMinigame = false;
                     Debug.LogWarning("[NPCController] Lie minigame did not start (another minigame may already be active).");
                 }
             }
             else
             {
+                hasCaughtPlayer = false;
+                _awaitingMinigameEnd = false;
+                triggeredMinigame = false;
                 Debug.LogWarning("[NPCController] MinigameManager instance not found.");
             }
         }
