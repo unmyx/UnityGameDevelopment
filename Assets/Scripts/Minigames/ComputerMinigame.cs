@@ -116,7 +116,7 @@ namespace Game.Minigames
             if (_uiController != null)
             {
                 _uiController.Show();
-                _uiController.SetStatusMessage("Computer connected.");
+                _uiController.SetStatusMessage(string.Empty);
             }
 
             StartWorldViewPresentation();
@@ -248,7 +248,7 @@ namespace Game.Minigames
             RequestFinish(MinigameResult.Cancelled);
         }
 
-        private void HandleSellRequested()
+        private void HandleSellRequested(string itemId)
         {
             GameManager gameManager = GameManager.Instance;
             if (gameManager == null)
@@ -257,7 +257,10 @@ namespace Game.Minigames
                 return;
             }
 
-            bool success = gameManager.TrySellTrackedStolenLootInHome(out int soldCount, out int payoutAmount);
+            bool success = gameManager.TrySellTrackedStolenLootItemUnitInHome(
+                itemId,
+                out int payoutAmount,
+                out int remainingTrackedCount);
             if (!success)
             {
                 UpdateStatusMessage("Sell unavailable.");
@@ -265,15 +268,9 @@ namespace Game.Minigames
                 return;
             }
 
-            string message;
-            if (soldCount <= 0 || payoutAmount <= 0)
-            {
-                message = "Nothing to sell.";
-            }
-            else
-            {
-                message = $"Sold {soldCount} item(s) for ${payoutAmount}.";
-            }
+            string message = payoutAmount > 0
+                ? $"Sold 1 item for ${payoutAmount}."
+                : "Nothing to sell.";
 
             EventBus.Publish(new PlayerFeedbackEvent(message));
             UpdateStatusMessage(message);
@@ -299,7 +296,10 @@ namespace Game.Minigames
             }
             else
             {
-                message = $"{displayName} unavailable.";
+                string unavailableReason = ResolveUpgradeUnavailableReason(upgradeId);
+                message = string.IsNullOrWhiteSpace(unavailableReason)
+                    ? $"{displayName} unavailable."
+                    : $"{displayName} unavailable: {unavailableReason}";
             }
 
             EventBus.Publish(new PlayerFeedbackEvent(message));
@@ -318,10 +318,16 @@ namespace Game.Minigames
             if (gameManager == null)
             {
                 _uiController.SetRuntimeSummary(0, 0);
+                _uiController.SetSellEntries(null);
+                _uiController.SetUpgradeEntries(null);
                 return;
             }
 
-            _uiController.SetRuntimeSummary(gameManager.GetCurrency(), gameManager.GetTotalStolenLootCountThisDay());
+            System.Collections.Generic.List<GameManager.SellableStolenLootEntryData> sellEntries =
+                gameManager.GetSellableStolenLootEntriesInHome();
+            _uiController.SetRuntimeSummary(gameManager.GetCurrency(), sellEntries != null ? sellEntries.Count : 0);
+            _uiController.SetSellEntries(sellEntries);
+            _uiController.SetUpgradeEntries(gameManager.GetHomeUpgradeStatusEntries());
         }
 
         private void UpdateStatusMessage(string message)
@@ -350,6 +356,40 @@ namespace Game.Minigames
             }
 
             return "Upgrade";
+        }
+
+        private static string ResolveUpgradeUnavailableReason(string upgradeId)
+        {
+            GameManager gameManager = GameManager.Instance;
+            if (gameManager == null)
+            {
+                return string.Empty;
+            }
+
+            System.Collections.Generic.List<GameManager.HomeUpgradeStatusData> statuses =
+                gameManager.GetHomeUpgradeStatusEntries();
+            if (statuses == null)
+            {
+                return string.Empty;
+            }
+
+            for (int i = 0; i < statuses.Count; i++)
+            {
+                GameManager.HomeUpgradeStatusData status = statuses[i];
+                if (status == null)
+                {
+                    continue;
+                }
+
+                if (!string.Equals(status.upgradeId, upgradeId, System.StringComparison.Ordinal))
+                {
+                    continue;
+                }
+
+                return status.unavailableReason ?? string.Empty;
+            }
+
+            return string.Empty;
         }
 
         private void RequestFinish(MinigameResult result)

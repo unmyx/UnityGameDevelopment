@@ -69,6 +69,29 @@ namespace Game.Core
             }
         }
 
+        [Serializable]
+        public class SellableStolenLootEntryData
+        {
+            public string itemId;
+            public string itemName;
+            public string itemDescription;
+            public Sprite itemIcon;
+            public int sellableCount;
+            public int unitPrice;
+        }
+
+        [Serializable]
+        public class HomeUpgradeStatusData
+        {
+            public string upgradeId;
+            public string displayName;
+            public int currentTier;
+            public int maxTier;
+            public int nextTierCost;
+            public bool canPurchase;
+            public string unavailableReason;
+        }
+
         private const string DailyTaskTypeCleaning = "cleaning";
         private const string DailyTaskTypeWelding = "welding";
         private const string MenuSceneName = "Menu";
@@ -774,17 +797,7 @@ namespace Game.Core
         public int GetUnlockedQuickSlots()
         {
             int tier = GetOwnedUpgradeTier(UpgradeIdInventoryQuickSlots);
-            switch (tier)
-            {
-                case 0:
-                    return 3;
-
-                case 1:
-                    return 6;
-
-                default:
-                    return 9;
-            }
+            return Mathf.Clamp(3 + Mathf.Max(0, tier), 3, 9);
         }
 
         public float GetCleaningEffectivenessMultiplier()
@@ -1481,6 +1494,207 @@ namespace Game.Core
             soldItemCount = totalRemoved;
             payoutAmount = totalPayout;
             return true;
+        }
+
+        public bool TrySellTrackedStolenLootItemUnitInHome(
+            string itemId,
+            out int payoutAmount,
+            out int remainingTrackedCount)
+        {
+            payoutAmount = 0;
+            remainingTrackedCount = 0;
+
+            if (_runFailed || _currentRunPhase != RunPhase.Home)
+            {
+                return false;
+            }
+
+            if (_inventorySystem == null)
+            {
+                RefreshRuntimeBindings();
+            }
+
+            if (_inventorySystem == null)
+            {
+                return false;
+            }
+
+            string normalizedItemId = NormalizeStolenLootItemId(itemId);
+            if (string.IsNullOrEmpty(normalizedItemId))
+            {
+                return false;
+            }
+
+            int trackedCount = GetStolenLootCountForItem(normalizedItemId);
+            if (trackedCount <= 0)
+            {
+                return false;
+            }
+
+            int unitPrice = GetStolenLootSellPrice(normalizedItemId);
+            if (unitPrice <= 0)
+            {
+                return false;
+            }
+
+            int removedCount = _inventorySystem.RemoveItemsByItemId(normalizedItemId, 1);
+            if (removedCount <= 0)
+            {
+                return false;
+            }
+
+            payoutAmount = unitPrice * removedCount;
+            if (payoutAmount > 0)
+            {
+                ModifyCurrency(payoutAmount);
+            }
+
+            List<StolenLootEntryData> trackedLootSnapshot = GetStolenLootThisDaySnapshot();
+            List<StolenLootEntryData> updatedTrackedLoot = new List<StolenLootEntryData>(trackedLootSnapshot.Count);
+
+            for (int i = 0; i < trackedLootSnapshot.Count; i++)
+            {
+                StolenLootEntryData trackedEntry = trackedLootSnapshot[i];
+                if (trackedEntry == null)
+                {
+                    continue;
+                }
+
+                string normalizedTrackedId = NormalizeStolenLootItemId(trackedEntry.itemId);
+                int count = Mathf.Max(0, trackedEntry.count);
+                if (string.IsNullOrEmpty(normalizedTrackedId) || count <= 0)
+                {
+                    continue;
+                }
+
+                if (string.Equals(normalizedTrackedId, normalizedItemId, StringComparison.Ordinal))
+                {
+                    count = Mathf.Max(0, count - removedCount);
+                }
+
+                if (count <= 0)
+                {
+                    continue;
+                }
+
+                updatedTrackedLoot.Add(new StolenLootEntryData
+                {
+                    itemId = normalizedTrackedId,
+                    count = count
+                });
+            }
+
+            RestoreStolenLootThisDayFromSave(updatedTrackedLoot);
+            remainingTrackedCount = GetStolenLootCountForItem(normalizedItemId);
+            return true;
+        }
+
+        public List<SellableStolenLootEntryData> GetSellableStolenLootEntriesInHome()
+        {
+            List<SellableStolenLootEntryData> entries = new List<SellableStolenLootEntryData>();
+            List<StolenLootEntryData> trackedLootSnapshot = GetStolenLootThisDaySnapshot();
+            if (trackedLootSnapshot == null || trackedLootSnapshot.Count <= 0)
+            {
+                return entries;
+            }
+
+            if (_inventorySystem == null)
+            {
+                RefreshRuntimeBindings();
+            }
+
+            if (_inventorySystem == null)
+            {
+                return entries;
+            }
+
+            Dictionary<string, int> inventoryCountsByItemId = new Dictionary<string, int>(StringComparer.Ordinal);
+            List<InventoryItem> inventoryItems = _inventorySystem.GetAllItems();
+            for (int i = 0; i < inventoryItems.Count; i++)
+            {
+                InventoryItem inventoryItem = inventoryItems[i];
+                if (inventoryItem == null || !inventoryItem.IsValid())
+                {
+                    continue;
+                }
+
+                string normalizedItemId = NormalizeStolenLootItemId(inventoryItem.ItemId);
+                if (string.IsNullOrEmpty(normalizedItemId))
+                {
+                    continue;
+                }
+
+                if (!inventoryCountsByItemId.TryGetValue(normalizedItemId, out int currentCount))
+                {
+                    currentCount = 0;
+                }
+
+                inventoryCountsByItemId[normalizedItemId] = currentCount + 1;
+            }
+
+            for (int i = 0; i < trackedLootSnapshot.Count; i++)
+            {
+                StolenLootEntryData trackedEntry = trackedLootSnapshot[i];
+                if (trackedEntry == null)
+                {
+                    continue;
+                }
+
+                string normalizedItemId = NormalizeStolenLootItemId(trackedEntry.itemId);
+                int trackedCount = Mathf.Max(0, trackedEntry.count);
+                if (string.IsNullOrEmpty(normalizedItemId) || trackedCount <= 0)
+                {
+                    continue;
+                }
+
+                if (!inventoryCountsByItemId.TryGetValue(normalizedItemId, out int inventoryCount) || inventoryCount <= 0)
+                {
+                    continue;
+                }
+
+                int unitPrice = GetStolenLootSellPrice(normalizedItemId);
+                if (unitPrice <= 0)
+                {
+                    continue;
+                }
+
+                int sellableCount = Mathf.Min(trackedCount, inventoryCount);
+                if (sellableCount <= 0)
+                {
+                    continue;
+                }
+
+                InventoryItem itemAsset = _inventorySystem.LoadItemById(normalizedItemId);
+                entries.Add(new SellableStolenLootEntryData
+                {
+                    itemId = normalizedItemId,
+                    itemName = itemAsset != null && !string.IsNullOrWhiteSpace(itemAsset.ItemName)
+                        ? itemAsset.ItemName
+                        : normalizedItemId,
+                    itemDescription = itemAsset != null ? itemAsset.ItemDescription : string.Empty,
+                    itemIcon = itemAsset != null ? itemAsset.ItemIcon : null,
+                    sellableCount = sellableCount,
+                    unitPrice = unitPrice
+                });
+            }
+
+            return entries;
+        }
+
+        public List<HomeUpgradeStatusData> GetHomeUpgradeStatusEntries()
+        {
+            List<HomeUpgradeStatusData> statuses = new List<HomeUpgradeStatusData>(SupportedUpgradeIds.Length);
+            for (int i = 0; i < SupportedUpgradeIds.Length; i++)
+            {
+                string upgradeId = SupportedUpgradeIds[i];
+                HomeUpgradeStatusData status = BuildHomeUpgradeStatus(upgradeId);
+                if (status != null)
+                {
+                    statuses.Add(status);
+                }
+            }
+
+            return statuses;
         }
 
         public void RestoreStolenLootThisDayFromSave(List<StolenLootEntryData> savedEntries)
@@ -2429,6 +2643,86 @@ namespace Game.Core
             return string.IsNullOrWhiteSpace(upgradeId)
                 ? string.Empty
                 : upgradeId.Trim().ToLowerInvariant();
+        }
+
+        private HomeUpgradeStatusData BuildHomeUpgradeStatus(string upgradeId)
+        {
+            string normalizedUpgradeId = NormalizeUpgradeId(upgradeId);
+            if (string.IsNullOrEmpty(normalizedUpgradeId))
+            {
+                return null;
+            }
+
+            int maxTier = GetMaxUpgradeTier(normalizedUpgradeId);
+            int currentTier = GetOwnedUpgradeTier(normalizedUpgradeId);
+
+            int nextTierCost = -1;
+            if (currentTier < maxTier
+                && UpgradeTierCostsById.TryGetValue(normalizedUpgradeId, out int[] tierCosts)
+                && tierCosts != null
+                && currentTier >= 0
+                && currentTier < tierCosts.Length)
+            {
+                nextTierCost = Mathf.Max(0, tierCosts[currentTier]);
+            }
+
+            bool canPurchase = false;
+            string unavailableReason = string.Empty;
+            if (_runFailed)
+            {
+                unavailableReason = "Run failed.";
+            }
+            else if (_currentRunPhase != RunPhase.Home)
+            {
+                unavailableReason = "Home only.";
+            }
+            else if (maxTier <= 0)
+            {
+                unavailableReason = "Unavailable.";
+            }
+            else if (currentTier >= maxTier)
+            {
+                unavailableReason = "Max tier reached.";
+            }
+            else if (_currency < nextTierCost)
+            {
+                unavailableReason = $"Need ${nextTierCost}.";
+            }
+            else
+            {
+                canPurchase = true;
+            }
+
+            return new HomeUpgradeStatusData
+            {
+                upgradeId = normalizedUpgradeId,
+                displayName = GetUpgradeDisplayNameForUi(normalizedUpgradeId),
+                currentTier = currentTier,
+                maxTier = maxTier,
+                nextTierCost = nextTierCost,
+                canPurchase = canPurchase,
+                unavailableReason = unavailableReason
+            };
+        }
+
+        private static string GetUpgradeDisplayNameForUi(string upgradeId)
+        {
+            if (string.Equals(upgradeId, UpgradeIdInventoryQuickSlots, StringComparison.Ordinal))
+            {
+                return "Inventory Slots";
+            }
+
+            if (string.Equals(upgradeId, UpgradeIdCleaningTool, StringComparison.Ordinal))
+            {
+                return "Cleaning Tool";
+            }
+
+            if (string.Equals(upgradeId, UpgradeIdWeldingTool, StringComparison.Ordinal))
+            {
+                return "Welding Tool";
+            }
+
+            return "Upgrade";
         }
 
         private static int GetMaxUpgradeTier(string upgradeId)

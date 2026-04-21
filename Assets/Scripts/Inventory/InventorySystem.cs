@@ -470,6 +470,11 @@ namespace Game.Inventory
             return null;
         }
 
+        public InventoryItem LoadItemById(string itemId)
+        {
+            return LoadItemAssetById(itemId);
+        }
+
         private void EnsureItemCacheBuilt()
         {
             if (_itemCacheById.Count > 0)
