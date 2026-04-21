@@ -42,6 +42,15 @@ namespace Game.UI
         [Tooltip("Root panel/group containing all HUD elements")]
         private GameObject _hudContainer;
 
+        [Header("HUD Visibility Groups")]
+        [SerializeField]
+        [Tooltip("Optional group that stays visible during gameplay phases (Work/Home). If unassigned, visibility falls back to HUD root alpha.")]
+        private GameObject _alwaysVisibleHudBlock;
+
+        [SerializeField]
+        [Tooltip("Optional group that is visible only during Work phase.")]
+        private GameObject _workOnlyHudBlock;
+
         [Header("TMP Font")]
         [SerializeField]
         [Tooltip("Optional TMP font asset override. Falls back to TMP project settings.")]
@@ -94,11 +103,13 @@ namespace Game.UI
         private int _currentDayWorkEarnings = -1;
         private int _currentDay = -1;
         private int _currentRunPhase = -1;
+        private int _currentWorkMinute = -1;
         private string _lastObjectivesDisplay = string.Empty;
         private float _feedbackTimeRemaining;
         private string _lastFeedbackMessage = string.Empty;
         private bool _hasLoggedMissingPromptText;
         private bool _hasLoggedMissingInteractionSystem;
+        private GameObject _objectivesPanelObject;
 
         private void Awake()
         {
@@ -140,9 +151,13 @@ namespace Game.UI
             DisableRaycastTarget(_crosshairText);
             DisableRaycastTarget(_interactionPromptText);
 
+            CacheDerivedHudReferences();
+            NormalizeHudLayout();
+
             if (_currencyText != null)
             {
                 _currencyText.textWrappingMode = TextWrappingModes.NoWrap;
+                _currencyText.alignment = TextAlignmentOptions.Left;
             }
 
             ValidatePromptReferences();
@@ -198,27 +213,68 @@ namespace Game.UI
         {
             UpdateVisibility();
             UpdateRunPhaseDisplay();
+            UpdateObjectivesDisplay();
             TickFeedbackDisplay();
         }
 
         private void UpdateVisibility()
         {
-            bool shouldBeVisible = !IsMinigamePresentationActive();
+            EvaluatePhaseVisibility(out bool showGameplayHud, out bool showWorkHud);
+            ApplyHudVisibility(showGameplayHud, showWorkHud);
 
-            bool shouldShowCrosshair = shouldBeVisible && IsFreeGameplayUnpaused();
+            bool shouldShowCrosshair = showGameplayHud && IsFreeGameplayUnpaused();
             if (_crosshairText != null)
             {
                 _crosshairText.gameObject.SetActive(shouldShowCrosshair);
             }
 
             UpdateInteractionPromptVisibility(shouldShowCrosshair);
+        }
 
+        private void EvaluatePhaseVisibility(out bool showGameplayHud, out bool showWorkHud)
+        {
+            showGameplayHud = false;
+            showWorkHud = false;
+
+            GameManager gameManager = GameManager.Instance;
+            if (gameManager == null)
+            {
+                return;
+            }
+
+            if (gameManager.CurrentState != GameState.FreePlay)
+            {
+                return;
+            }
+
+            if (IsMinigamePresentationActive())
+            {
+                return;
+            }
+
+            GameManager.RunPhase runPhase = gameManager.GetCurrentRunPhase();
+            bool isSupportedGameplayPhase = runPhase == GameManager.RunPhase.Work || runPhase == GameManager.RunPhase.Home;
+            if (!isSupportedGameplayPhase)
+            {
+                return;
+            }
+
+            showGameplayHud = true;
+            showWorkHud = runPhase == GameManager.RunPhase.Work;
+        }
+
+        private void ApplyHudVisibility(bool showGameplayHud, bool showWorkHud)
+        {
             if (_hudContainerCanvasGroup != null)
             {
-                _hudContainerCanvasGroup.alpha = shouldBeVisible ? 1f : 0f;
+                _hudContainerCanvasGroup.alpha = showGameplayHud ? 1f : 0f;
                 _hudContainerCanvasGroup.interactable = false;
                 _hudContainerCanvasGroup.blocksRaycasts = false;
             }
+
+            SetOptionalGroupActive(_alwaysVisibleHudBlock, showGameplayHud);
+            SetWorkHudVisibility(showGameplayHud && showWorkHud);
+
         }
 
         private bool IsMinigamePresentationActive()
@@ -362,14 +418,18 @@ namespace Game.UI
             int currentDay = gameManager.GetCurrentDay();
             GameManager.RunPhase currentRunPhase = gameManager.GetCurrentRunPhase();
             int currentRunPhaseValue = (int)currentRunPhase;
+            int currentWorkMinute = Mathf.FloorToInt(gameManager.GetCurrentWorkHour() * 60f);
 
-            if (!force && _currentDay == currentDay && _currentRunPhase == currentRunPhaseValue)
+            bool workClockChanged = currentRunPhase == GameManager.RunPhase.Work && _currentWorkMinute != currentWorkMinute;
+
+            if (!force && _currentDay == currentDay && _currentRunPhase == currentRunPhaseValue && !workClockChanged)
             {
                 return;
             }
 
             _currentDay = currentDay;
             _currentRunPhase = currentRunPhaseValue;
+            _currentWorkMinute = currentWorkMinute;
 
             if (_dayText != null)
             {
@@ -378,7 +438,14 @@ namespace Game.UI
 
             if (_runPhaseText != null)
             {
-                _runPhaseText.text = $"Phase: {currentRunPhase}";
+                if (currentRunPhase == GameManager.RunPhase.Work)
+                {
+                    _runPhaseText.text = $"Phase: {currentRunPhase} | Time: {FormatWorkClock(gameManager.GetCurrentWorkHour())}";
+                }
+                else
+                {
+                    _runPhaseText.text = $"Phase: {currentRunPhase}";
+                }
             }
         }
 
@@ -389,35 +456,42 @@ namespace Game.UI
                 return;
             }
 
-            ObjectiveManager objectiveManager = ObjectiveManager.Instance;
-            if (objectiveManager == null)
+            GameManager gameManager = GameManager.Instance;
+            if (gameManager == null)
             {
                 return;
             }
 
-            System.Collections.Generic.List<Objective> activeObjectives = objectiveManager.GetActiveObjectives();
-            System.Collections.Generic.List<Objective> completedObjectives = objectiveManager.GetCompletedObjectives();
-
-            string objectivesList;
-            if (activeObjectives.Count > 0)
+            if (gameManager.GetCurrentRunPhase() != GameManager.RunPhase.Work)
             {
-                System.Text.StringBuilder builder = new System.Text.StringBuilder();
-                builder.AppendLine("Objectives:");
-                foreach (Objective obj in activeObjectives)
+                string homeDisplay = string.Empty;
+                if (_lastObjectivesDisplay == homeDisplay)
                 {
-                    builder.AppendLine($"- {obj.ObjectiveName} ({obj.CompletionCount}/{obj.RequiredCompletions})");
+                    return;
                 }
 
-                objectivesList = builder.ToString().TrimEnd();
+                _lastObjectivesDisplay = homeDisplay;
+                _objectivesText.text = homeDisplay;
+                return;
             }
-            else if (completedObjectives.Count > 0)
-            {
-                objectivesList = "Mission Complete!";
-            }
-            else
-            {
-                objectivesList = "No objectives";
-            }
+
+            gameManager.GetActiveWaveTaskProgress(
+                out int cleaningCompleted,
+                out int cleaningTotal,
+                out int weldingCompleted,
+                out int weldingTotal,
+                out bool hasNextWave,
+                out float nextWaveEtaSeconds);
+
+            string waveSummary = hasNextWave
+                ? $"Next task in: {Mathf.CeilToInt(Mathf.Max(0f, nextWaveEtaSeconds))}s"
+                : "No more work today";
+
+            string objectivesList =
+                $"Work Tasks:\n" +
+                $"- Clean {cleaningCompleted}/{cleaningTotal}\n" +
+                $"- Weld {weldingCompleted}/{weldingTotal}\n" +
+                $"{waveSummary}";
 
             if (_lastObjectivesDisplay == objectivesList)
             {
@@ -426,6 +500,14 @@ namespace Game.UI
 
             _lastObjectivesDisplay = objectivesList;
             _objectivesText.text = objectivesList;
+        }
+
+        private static string FormatWorkClock(float currentHour)
+        {
+            float clamped = Mathf.Clamp(currentHour, 0f, 23.999f);
+            int hours = Mathf.FloorToInt(clamped);
+            int minutes = Mathf.FloorToInt((clamped - hours) * 60f);
+            return $"{hours:00}:{minutes:00}";
         }
 
         private void ApplyTextFont(TextMeshProUGUI textComponent)
@@ -601,6 +683,100 @@ namespace Game.UI
             crosshairText.alignment = TextAlignmentOptions.Center;
             crosshairText.color = Color.white;
             crosshairText.raycastTarget = false;
+        }
+
+        private void SetWorkHudVisibility(bool showWorkHud)
+        {
+            if (_workOnlyHudBlock != null)
+            {
+                _workOnlyHudBlock.SetActive(showWorkHud);
+                return;
+            }
+
+            if (_runPhaseText != null)
+            {
+                _runPhaseText.gameObject.SetActive(showWorkHud);
+            }
+
+            if (_objectivesPanelObject != null)
+            {
+                _objectivesPanelObject.SetActive(showWorkHud);
+                return;
+            }
+
+            if (_objectivesText != null)
+            {
+                _objectivesText.gameObject.SetActive(showWorkHud);
+            }
+        }
+
+        private static void SetOptionalGroupActive(GameObject group, bool isActive)
+        {
+            if (group != null)
+            {
+                group.SetActive(isActive);
+            }
+        }
+
+        private void CacheDerivedHudReferences()
+        {
+            if (_objectivesText != null && _objectivesText.transform != null && _objectivesText.transform.parent != null)
+            {
+                _objectivesPanelObject = _objectivesText.transform.parent.gameObject;
+            }
+        }
+
+        private void NormalizeHudLayout()
+        {
+            NormalizeTopLeftLabel(_currencyText, 24f, 24f, 560f, 40f, TextAlignmentOptions.Left);
+            NormalizeTopLeftLabel(_dayText, 24f, 66f, 320f, 34f, TextAlignmentOptions.Left);
+            NormalizeTopLeftLabel(_runPhaseText, 24f, 102f, 520f, 34f, TextAlignmentOptions.Left);
+            NormalizeTopRightLabel(_objectivesText, 24f, 24f, 420f, 140f, TextAlignmentOptions.TopRight);
+        }
+
+        private static void NormalizeTopLeftLabel(TMP_Text textComponent, float marginLeft, float marginTop, float width, float height, TextAlignmentOptions alignment)
+        {
+            if (textComponent == null)
+            {
+                return;
+            }
+
+            RectTransform rect = textComponent.rectTransform;
+            if (rect == null)
+            {
+                return;
+            }
+
+            rect.anchorMin = new Vector2(0f, 1f);
+            rect.anchorMax = new Vector2(0f, 1f);
+            rect.pivot = new Vector2(0f, 1f);
+            rect.anchoredPosition = new Vector2(marginLeft, -marginTop);
+            rect.sizeDelta = new Vector2(width, height);
+            rect.localScale = Vector3.one;
+            textComponent.alignment = alignment;
+            textComponent.textWrappingMode = TextWrappingModes.NoWrap;
+        }
+
+        private static void NormalizeTopRightLabel(TMP_Text textComponent, float marginRight, float marginTop, float width, float height, TextAlignmentOptions alignment)
+        {
+            if (textComponent == null)
+            {
+                return;
+            }
+
+            RectTransform rect = textComponent.rectTransform;
+            if (rect == null)
+            {
+                return;
+            }
+
+            rect.anchorMin = new Vector2(1f, 1f);
+            rect.anchorMax = new Vector2(1f, 1f);
+            rect.pivot = new Vector2(1f, 1f);
+            rect.anchoredPosition = new Vector2(-marginRight, -marginTop);
+            rect.sizeDelta = new Vector2(width, height);
+            rect.localScale = Vector3.one;
+            textComponent.alignment = alignment;
         }
     }
 }

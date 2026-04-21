@@ -121,6 +121,8 @@ namespace Game.Minigames
             }
 
             NormalizeAndStyleTimerText(_timerText, _minigameCanvas.transform);
+            NormalizeCoverageTextRect(_coverageText, _minigameCanvas.transform);
+            NormalizeCoverageBarRect(_coverageFillImage, _minigameCanvas.transform);
             _remainingTimeSeconds = _timeLimitSeconds;
             _hasProcessedTimeoutFailure = false;
             _lastOverallCoverage = -1f;
@@ -182,6 +184,9 @@ namespace Game.Minigames
             {
                 _timerText.gameObject.SetActive(true);
             }
+
+            NormalizeCoverageTextRect(_coverageText, _minigameCanvas != null ? _minigameCanvas.transform : null);
+            NormalizeCoverageBarRect(_coverageFillImage, _minigameCanvas != null ? _minigameCanvas.transform : null);
 
             if (_unlockCursorDuringMinigame)
             {
@@ -1423,6 +1428,71 @@ namespace Game.Minigames
             timerRect.localScale = Vector3.one;
             timerRect.gameObject.SetActive(true);
             timerRect.SetAsLastSibling();
+        }
+
+        private void NormalizeCoverageTextRect(TMP_Text coverageText, Transform canvasTransform)
+        {
+            if (coverageText == null || canvasTransform == null)
+            {
+                return;
+            }
+
+            if (coverageText is TextMeshProUGUI coverageUiText)
+            {
+                if (coverageUiText.font == null && TMP_Settings.instance != null && TMP_Settings.defaultFontAsset != null)
+                {
+                    coverageUiText.font = TMP_Settings.defaultFontAsset;
+                }
+
+                coverageUiText.alignment = TextAlignmentOptions.Right;
+                coverageUiText.fontSize = Mathf.Max(26f, coverageUiText.fontSize);
+                coverageUiText.textWrappingMode = TextWrappingModes.NoWrap;
+                coverageUiText.color = Color.white;
+            }
+
+            coverageText.raycastTarget = false;
+
+            RectTransform coverageRect = coverageText.rectTransform;
+            if (coverageRect == null)
+            {
+                return;
+            }
+
+            coverageRect.SetParent(canvasTransform, false);
+            coverageRect.anchorMin = new Vector2(1f, 1f);
+            coverageRect.anchorMax = new Vector2(1f, 1f);
+            coverageRect.pivot = new Vector2(1f, 1f);
+            coverageRect.anchoredPosition = new Vector2(-24f, -82f);
+            coverageRect.sizeDelta = new Vector2(240f, 40f);
+            coverageRect.localScale = Vector3.one;
+            coverageRect.gameObject.SetActive(true);
+            coverageRect.SetAsLastSibling();
+        }
+
+        private void NormalizeCoverageBarRect(Image coverageFillImage, Transform canvasTransform)
+        {
+            if (coverageFillImage == null || canvasTransform == null || coverageFillImage.rectTransform == null)
+            {
+                return;
+            }
+
+            RectTransform fillRect = coverageFillImage.rectTransform;
+            RectTransform backgroundRect = fillRect.parent as RectTransform;
+            RectTransform progressRect = backgroundRect != null ? backgroundRect.parent as RectTransform : null;
+
+            RectTransform targetRect = progressRect != null ? progressRect : backgroundRect;
+            if (targetRect == null)
+            {
+                return;
+            }
+
+            targetRect.SetParent(canvasTransform, false);
+            targetRect.anchorMin = new Vector2(0.5f, 1f);
+            targetRect.anchorMax = new Vector2(0.5f, 1f);
+            targetRect.pivot = new Vector2(0.5f, 1f);
+            targetRect.anchoredPosition = new Vector2(0f, -24f);
+            targetRect.sizeDelta = new Vector2(520f, 24f);
+            targetRect.localScale = Vector3.one;
         }
 
         private void UpdateTimer()

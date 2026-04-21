@@ -30,6 +30,8 @@ namespace Game.Core
         public int currentDay = 1;
         public int currentRunPhase;
         public bool workdayCompleted;
+        public float currentWorkHour = 7f;
+        public int nextTaskWaveIndex;
         public int consecutiveFailedWorkdays;
         public bool runFailed;
         public string runFailedReason;
@@ -43,6 +45,8 @@ namespace Game.Core
         public ObjectivesSaveData objectives = new ObjectivesSaveData();
         public List<string> consumedCollectibleIds = new List<string>();
         public List<DailyTaskAssignmentData> dailyTaskAssignments = new List<DailyTaskAssignmentData>();
+        public List<GeneratedTaskWaveData> generatedTaskWaves = new List<GeneratedTaskWaveData>();
+        public List<string> unlockedTaskKeys = new List<string>();
         public List<StolenLootEntryData> stolenLootThisDay = new List<StolenLootEntryData>();
     }
 
@@ -72,6 +76,13 @@ namespace Game.Core
     {
         public string itemId;
         public int count;
+    }
+
+    [System.Serializable]
+    public class GeneratedTaskWaveData
+    {
+        public float unlockHour;
+        public List<string> taskKeys = new List<string>();
     }
 
     [System.Serializable]

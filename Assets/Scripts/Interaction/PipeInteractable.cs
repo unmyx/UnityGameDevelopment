@@ -1,6 +1,7 @@
 ﻿using System;
 using System.Collections.Generic;
 using Game.Core;
+using Game.Core.Events;
 using Game.Minigames;
 using TMPro;
 using UnityEngine;
@@ -24,6 +25,9 @@ namespace Game.Interaction
 
         [SerializeField]
         private TMP_Text _progressText;
+        
+        [SerializeField]
+        private TMP_Text _toolText;
 
         [Header("World View Camera")]
         [SerializeField]
@@ -82,6 +86,18 @@ namespace Game.Interaction
         [SerializeField]
         [Min(1)]
         private int _worldStainsPerSurface = 2;
+        
+        [SerializeField]
+        [Min(0.01f)]
+        private float _worldStainMinSpacing = 0.14f;
+        
+        [SerializeField]
+        [Min(-1)]
+        private int _requiredStainsMin = -1;
+        
+        [SerializeField]
+        [Min(-1)]
+        private int _requiredStainsMax = -1;
 
         protected override MinigameData BuildMinigameData()
         {
@@ -110,6 +126,7 @@ namespace Game.Interaction
             data.SetParameter("canvas", _cleaningCanvas);
             data.SetParameter("timer_text", _timerText);
             data.SetParameter("progress_text", _progressText);
+            data.SetParameter("tool_text", _toolText);
             data.SetParameter("world_camera_pose", _stationCameraPose);
             data.SetParameter("world_look_target", _stationCameraLookTarget);
             data.SetParameter("world_cleaning_surface_root", _worldCleaningSurfaceRoot);
@@ -124,18 +141,52 @@ namespace Game.Interaction
             data.SetParameter("world_min_mouse_move_pixels", _worldMinMouseMovePixels);
             data.SetParameter("world_swipe_gain_per_pixel", _worldSwipeGainPerPixel * cleaningEffectivenessMultiplier * cleaningDayDifficultyMultiplier);
             data.SetParameter("world_stain_marker_scale", _worldStainMarkerScale);
+            data.SetParameter("world_stain_min_spacing", _worldStainMinSpacing);
             data.SetParameter("world_stains_per_surface", _worldStainsPerSurface);
             data.SetParameter("world_fixed_swipes_per_stain", FixedSwipesPerStain);
+            data.SetParameter("required_stains_min", _requiredStainsMin);
+            data.SetParameter("required_stains_max", _requiredStainsMax);
+            data.SetParameter("world_spawn_seed", UnityEngine.Random.Range(int.MinValue, int.MaxValue));
+            data.SetParameter("cleaning_tool_label", ResolveCleaningToolLabel(cleaningEffectivenessMultiplier));
+            data.SetParameter("cleaning_tool_effectiveness_multiplier", cleaningEffectivenessMultiplier);
 
             return data;
+        }
+
+        private static string ResolveCleaningToolLabel(float multiplier)
+        {
+            if (multiplier >= 1.35f)
+            {
+                return "Chemical";
+            }
+
+            if (multiplier >= 1.1f)
+            {
+                return "Gasoline";
+            }
+
+            return "Water";
         }
 
         protected override void StartMinigame(MinigameData data)
         {
             GameManager gameManager = GameManager.Instance;
+            string taskKey = GetDailyTaskLocationKey();
+
+            if (gameManager != null
+                && !gameManager.CanLaunchTaskAtLocation(DailyTaskType, taskKey, out string blockedReason))
+            {
+                if (!string.IsNullOrWhiteSpace(blockedReason))
+                {
+                    EventBus.Publish(new PlayerFeedbackEvent(blockedReason));
+                }
+
+                return;
+            }
+
             if (gameManager != null)
             {
-                gameManager.RegisterDailyTaskLaunchContext(DailyTaskType, GetDailyTaskLocationKey());
+                gameManager.RegisterDailyTaskLaunchContext(DailyTaskType, taskKey);
             }
 
             MinigameManager.Instance?.StartMinigame<CleaningMinigame>(data);

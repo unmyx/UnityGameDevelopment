@@ -48,6 +48,7 @@ namespace Game.UI
     public class MainMenuController : MonoBehaviour
     {
         private const string GameplaySceneName = "GameplayScene";
+        private const string HomeSceneName = "HomeScene";
 
         [SerializeField]
         private Button _startButton;
@@ -228,16 +229,21 @@ namespace Game.UI
                 return;
             }
 
-            if (!SaveManager.TryReadRunFailureMeta(out bool runFailed, out string reason))
+            if (!SaveManager.TryReadRunResumeMeta(out int savedRunPhase, out int _, out bool runFailed))
             {
-                StartGameplayScene();
+                StartHomeScene();
                 return;
             }
 
             if (!runFailed)
             {
-                StartGameplayScene();
+                RouteToSceneForSavedRunPhase(savedRunPhase);
                 return;
+            }
+
+            if (!SaveManager.TryReadRunFailureMeta(out _, out string reason))
+            {
+                reason = string.Empty;
             }
 
             ShowGameOverPanel(reason);
@@ -342,13 +348,30 @@ namespace Game.UI
                 inventorySystem.ClearInventory();
             }
 
-            StartGameplayScene();
+            StartHomeScene();
         }
 
         private void StartGameplayScene()
         {
             HideGameOverPanel();
             SceneManager.LoadScene(GameplaySceneName);
+        }
+
+        private void StartHomeScene()
+        {
+            HideGameOverPanel();
+            SceneManager.LoadScene(HomeSceneName);
+        }
+
+        private void RouteToSceneForSavedRunPhase(int savedRunPhase)
+        {
+            if (savedRunPhase == (int)GameManager.RunPhase.Work)
+            {
+                StartGameplayScene();
+                return;
+            }
+
+            StartHomeScene();
         }
 
         private void ShowGameOverPanel(string reason)

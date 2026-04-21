@@ -1,6 +1,7 @@
 using System.Collections.Generic;
 using System;
 using Game.Core;
+using Game.Core.Events;
 using Game.Minigames;
 using TMPro;
 using UnityEngine;
@@ -131,9 +132,22 @@ namespace Game.Interaction
         protected override void StartMinigame(MinigameData data)
         {
             GameManager gameManager = GameManager.Instance;
+            string taskKey = GetDailyTaskLocationKey();
+
+            if (gameManager != null
+                && !gameManager.CanLaunchTaskAtLocation(DailyTaskType, taskKey, out string blockedReason))
+            {
+                if (!string.IsNullOrWhiteSpace(blockedReason))
+                {
+                    EventBus.Publish(new PlayerFeedbackEvent(blockedReason));
+                }
+
+                return;
+            }
+
             if (gameManager != null)
             {
-                gameManager.RegisterDailyTaskLaunchContext(DailyTaskType, GetDailyTaskLocationKey());
+                gameManager.RegisterDailyTaskLaunchContext(DailyTaskType, taskKey);
             }
 
             MinigameManager.Instance?.StartMinigame<WeldingFillMinigame>(data);

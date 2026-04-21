@@ -24,6 +24,11 @@ namespace Game.UI
         [Tooltip("Assign slot background Image components for Slot_1 through Slot_9.")]
         private Image[] _slotBackgrounds = new Image[9];
 
+        [Header("Slot Layout")]
+        [SerializeField]
+        [Tooltip("Optional SlotGrid HorizontalLayoutGroup used to keep unlocked slots centered.")]
+        private HorizontalLayoutGroup _slotGridLayoutGroup;
+
         [Header("Selected Slot Visuals")]
         [SerializeField]
         [Tooltip("Color applied to selected slot background.")]
@@ -119,6 +124,8 @@ namespace Game.UI
         private void Awake()
         {
             EnsureSlotImageSafety();
+            EnsureSlotGridLayoutBinding();
+            EnsureSlotGridCentered();
             _selectedSlotIndex = 0;
             EnsureHeldItemAnchor();
 
@@ -261,6 +268,10 @@ namespace Game.UI
         public void RefreshAllSlots()
         {
             InventorySystem inventorySystem = InventorySystem.Instance;
+            int unlockedQuickSlots = GetUnlockedQuickSlotCount();
+            EnsureSelectedSlotIsVisible(unlockedQuickSlots);
+            ApplySlotVisibility(unlockedQuickSlots);
+
             if (inventorySystem == null)
             {
                 ClearAllSlots();
@@ -274,6 +285,12 @@ namespace Game.UI
 
             for (int index = 0; index < maxSlots; index++)
             {
+                if (index >= unlockedQuickSlots)
+                {
+                    SetSlotVisual(index, null);
+                    continue;
+                }
+
                 int x = index % width;
                 int y = index / width;
 
@@ -432,7 +449,7 @@ namespace Game.UI
 
         private void RefreshSlotVisualAtIndex(int index)
         {
-            if (index < 0 || index >= VisibleSlotCount)
+            if (index < 0 || index >= VisibleSlotCount || index >= GetUnlockedQuickSlotCount())
             {
                 return;
             }
@@ -455,7 +472,7 @@ namespace Game.UI
 
                 if (i >= unlockedQuickSlots)
                 {
-                    slotBackground.color = GetLockedSlotColor();
+                    slotBackground.color = _unselectedSlotColor;
                     continue;
                 }
 
@@ -468,16 +485,6 @@ namespace Game.UI
             GameManager gameManager = GameManager.Instance;
             int unlocked = gameManager != null ? gameManager.GetUnlockedQuickSlots() : VisibleSlotCount;
             return Mathf.Clamp(unlocked, 1, VisibleSlotCount);
-        }
-
-        private Color GetLockedSlotColor()
-        {
-            const float dimFactor = 0.55f;
-            return new Color(
-                _unselectedSlotColor.r * dimFactor,
-                _unselectedSlotColor.g * dimFactor,
-                _unselectedSlotColor.b * dimFactor,
-                _unselectedSlotColor.a);
         }
 
         private void RefreshHeldItemObject()
@@ -588,6 +595,11 @@ namespace Game.UI
 
         private InventoryItem GetItemAtVisibleIndex(int visibleIndex)
         {
+            if (visibleIndex < 0 || visibleIndex >= GetUnlockedQuickSlotCount())
+            {
+                return null;
+            }
+
             InventorySystem inventorySystem = InventorySystem.Instance;
             if (inventorySystem == null)
             {
@@ -704,6 +716,76 @@ namespace Game.UI
             _hasLoggedMissingHeldItemAnchor = false;
             _lastHeldItemAnchorBindFailureReason = string.Empty;
             return true;
+        }
+
+        private void EnsureSelectedSlotIsVisible(int unlockedQuickSlots)
+        {
+            int clamped = Mathf.Clamp(_selectedSlotIndex, 0, Mathf.Max(0, unlockedQuickSlots - 1));
+            if (_selectedSlotIndex != clamped)
+            {
+                _selectedSlotIndex = clamped;
+            }
+        }
+
+        private void ApplySlotVisibility(int unlockedQuickSlots)
+        {
+            int maxSlots = Mathf.Max(_slotIcons.Length, _slotBackgrounds.Length);
+            for (int i = 0; i < maxSlots; i++)
+            {
+                GameObject slotRoot = GetSlotRoot(i);
+                if (slotRoot == null)
+                {
+                    continue;
+                }
+
+                bool shouldBeActive = i < unlockedQuickSlots;
+                if (slotRoot.activeSelf != shouldBeActive)
+                {
+                    slotRoot.SetActive(shouldBeActive);
+                }
+            }
+        }
+
+        private GameObject GetSlotRoot(int index)
+        {
+            if (index < 0 || index >= VisibleSlotCount)
+            {
+                return null;
+            }
+
+            if (index < _slotBackgrounds.Length && _slotBackgrounds[index] != null)
+            {
+                return _slotBackgrounds[index].gameObject;
+            }
+
+            if (index < _slotIcons.Length && _slotIcons[index] != null)
+            {
+                Transform iconTransform = _slotIcons[index].transform;
+                if (iconTransform != null)
+                {
+                    return iconTransform.parent != null ? iconTransform.parent.gameObject : iconTransform.gameObject;
+                }
+            }
+
+            return null;
+        }
+
+        private void EnsureSlotGridLayoutBinding()
+        {
+            if (_slotGridLayoutGroup == null)
+            {
+                _slotGridLayoutGroup = GetComponentInChildren<HorizontalLayoutGroup>(includeInactive: true);
+            }
+        }
+
+        private void EnsureSlotGridCentered()
+        {
+            if (_slotGridLayoutGroup == null)
+            {
+                return;
+            }
+
+            _slotGridLayoutGroup.childAlignment = TextAnchor.MiddleCenter;
         }
 
         private void EnsurePreviewRawImage()

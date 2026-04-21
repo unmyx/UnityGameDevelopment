@@ -50,6 +50,13 @@ namespace Game.Core
         }
 
         [Serializable]
+        private class GeneratedTaskWave
+        {
+            public float unlockHour;
+            public List<string> taskKeys = new List<string>();
+        }
+
+        [Serializable]
         private class StolenLootTrackerEntry
         {
             public string itemId;
@@ -81,6 +88,8 @@ namespace Game.Core
         private const float MinWeldingDayDifficultyMultiplier = 0.68f;
         private const int MaxConsecutiveFailedWorkdaysBeforeGameOver = 3;
         private const int FailedLieEscalationThresholdPerDay = 3;
+        private const float DefaultWorkdayStartHour = 7f;
+        private const float DefaultWorkdayEndHour = 17f;
 
         private static readonly Dictionary<string, int> StolenLootSellPriceByItemId =
             new Dictionary<string, int>(StringComparer.Ordinal)
@@ -177,6 +186,50 @@ namespace Game.Core
         [SerializeField]
         [Tooltip("Day index for which assignments were generated.")]
         private int _dailyTaskAssignmentDay = -1;
+
+        [Header("Workday Runtime")]
+        [SerializeField]
+        [Tooltip("Real-time minutes for a full 07:00-17:00 work shift.")]
+        [Min(1f)]
+        private float _workdayDurationMinutes = 12f;
+
+        [SerializeField]
+        [Tooltip("Minimum real-time delay in minutes between randomized task waves after the initial wave.")]
+        [Min(0.5f)]
+        private float _waveDelayMinMinutes = 2f;
+
+        [SerializeField]
+        [Tooltip("Maximum real-time delay in minutes between randomized task waves after the initial wave.")]
+        [Min(0.5f)]
+        private float _waveDelayMaxMinutes = 4f;
+
+        [SerializeField]
+        [Tooltip("No new task waves are scheduled or unlocked after this in-shift hour.")]
+        [Range(DefaultWorkdayStartHour, DefaultWorkdayEndHour)]
+        private float _lateWaveCutoffHour = 15.5f;
+
+        [SerializeField]
+        [Tooltip("Minimum in-shift minutes before 17:00 where new waves are still allowed to unlock.")]
+        [Min(1f)]
+        private float _lateWaveSafetyBufferMinutes = 60f;
+
+        [SerializeField]
+        [Tooltip("Current in-shift work clock hour.")]
+        private float _currentWorkHour = DefaultWorkdayStartHour;
+
+        [SerializeField]
+        [Tooltip("Index of the next generated wave to unlock.")]
+        private int _nextTaskWaveIndex;
+
+        [SerializeField]
+        [Tooltip("Generated unlock schedule for assignment waves in the current workday.")]
+        private List<GeneratedTaskWave> _generatedTaskWaves = new List<GeneratedTaskWave>();
+
+        [SerializeField]
+        [Tooltip("Task keys that are currently unlocked and launchable.")]
+        private List<string> _unlockedTaskKeys = new List<string>();
+
+        private bool _workdayRuntimeInitialized;
 
         [Header("Stolen Loot Tracking")]
         [SerializeField]
@@ -284,6 +337,7 @@ namespace Game.Core
         private void Update()
         {
             _currentStateImplementation?.OnStateUpdate();
+            TickWorkdayRuntime();
         }
 
         private void OnSceneLoaded(Scene scene, LoadSceneMode mode)
@@ -488,6 +542,182 @@ namespace Game.Core
         public RunPhase GetCurrentRunPhase()
         {
             return _currentRunPhase;
+        }
+
+        public float GetCurrentWorkHour()
+        {
+            return Mathf.Clamp(_currentWorkHour, DefaultWorkdayStartHour, DefaultWorkdayEndHour);
+        }
+
+        public float GetCurrentWorkHourForSave()
+        {
+            return GetCurrentWorkHour();
+        }
+
+        public int GetNextTaskWaveIndexForSave()
+        {
+            return Mathf.Max(0, _nextTaskWaveIndex);
+        }
+
+        public List<GeneratedTaskWaveData> GetGeneratedTaskWavesForSave()
+        {
+            List<GeneratedTaskWaveData> snapshot = new List<GeneratedTaskWaveData>(_generatedTaskWaves.Count);
+            for (int i = 0; i < _generatedTaskWaves.Count; i++)
+            {
+                GeneratedTaskWave wave = _generatedTaskWaves[i];
+                if (wave == null)
+                {
+                    continue;
+                }
+
+                GeneratedTaskWaveData data = new GeneratedTaskWaveData
+                {
+                    unlockHour = Mathf.Clamp(wave.unlockHour, DefaultWorkdayStartHour, DefaultWorkdayEndHour),
+                    taskKeys = new List<string>()
+                };
+
+                if (wave.taskKeys != null)
+                {
+                    for (int k = 0; k < wave.taskKeys.Count; k++)
+                    {
+                        string normalized = NormalizeTaskKey(wave.taskKeys[k]);
+                        if (!string.IsNullOrEmpty(normalized) && !data.taskKeys.Contains(normalized))
+                        {
+                            data.taskKeys.Add(normalized);
+                        }
+                    }
+                }
+
+                snapshot.Add(data);
+            }
+
+            return snapshot;
+        }
+
+        public List<string> GetUnlockedTaskKeysForSave()
+        {
+            List<string> snapshot = new List<string>(_unlockedTaskKeys.Count);
+            for (int i = 0; i < _unlockedTaskKeys.Count; i++)
+            {
+                string normalized = NormalizeTaskKey(_unlockedTaskKeys[i]);
+                if (!string.IsNullOrEmpty(normalized) && !snapshot.Contains(normalized))
+                {
+                    snapshot.Add(normalized);
+                }
+            }
+
+            return snapshot;
+        }
+
+        public bool TryGetNextTaskWaveEtaSeconds(out float etaSeconds)
+        {
+            etaSeconds = 0f;
+
+            if (_nextTaskWaveIndex < 0 || _nextTaskWaveIndex >= _generatedTaskWaves.Count)
+            {
+                return false;
+            }
+
+            GeneratedTaskWave nextWave = _generatedTaskWaves[_nextTaskWaveIndex];
+            if (nextWave == null)
+            {
+                return false;
+            }
+
+            float deltaHours = Mathf.Max(0f, nextWave.unlockHour - GetCurrentWorkHour());
+            etaSeconds = deltaHours * 3600f;
+            return true;
+        }
+
+        public void GetDailyTaskProgress(out int cleaningCompleted, out int cleaningTotal, out int weldingCompleted, out int weldingTotal)
+        {
+            cleaningCompleted = 0;
+            cleaningTotal = 0;
+            weldingCompleted = 0;
+            weldingTotal = 0;
+
+            for (int i = 0; i < _dailyTaskAssignments.Count; i++)
+            {
+                DailyTaskAssignment assignment = _dailyTaskAssignments[i];
+                if (assignment == null)
+                {
+                    continue;
+                }
+
+                if (string.Equals(assignment.taskType, DailyTaskTypeCleaning, StringComparison.Ordinal))
+                {
+                    cleaningTotal++;
+                    if (assignment.isCompleted)
+                    {
+                        cleaningCompleted++;
+                    }
+
+                    continue;
+                }
+
+                if (string.Equals(assignment.taskType, DailyTaskTypeWelding, StringComparison.Ordinal))
+                {
+                    weldingTotal++;
+                    if (assignment.isCompleted)
+                    {
+                        weldingCompleted++;
+                    }
+                }
+            }
+        }
+
+        public void GetActiveWaveTaskProgress(
+            out int cleaningCompleted,
+            out int cleaningTotal,
+            out int weldingCompleted,
+            out int weldingTotal,
+            out bool hasPendingWave,
+            out float nextWaveEtaSeconds)
+        {
+            cleaningCompleted = 0;
+            cleaningTotal = 0;
+            weldingCompleted = 0;
+            weldingTotal = 0;
+
+            EnsureDailyAssignmentsForCurrentWorkday();
+            EnsureWorkdayRuntimeInitialized();
+
+            for (int i = 0; i < _dailyTaskAssignments.Count; i++)
+            {
+                DailyTaskAssignment assignment = _dailyTaskAssignments[i];
+                if (assignment == null)
+                {
+                    continue;
+                }
+
+                if (!IsTaskKeyUnlocked(assignment.taskKey))
+                {
+                    continue;
+                }
+
+                if (string.Equals(assignment.taskType, DailyTaskTypeCleaning, StringComparison.Ordinal))
+                {
+                    cleaningTotal++;
+                    if (assignment.isCompleted)
+                    {
+                        cleaningCompleted++;
+                    }
+
+                    continue;
+                }
+
+                if (string.Equals(assignment.taskType, DailyTaskTypeWelding, StringComparison.Ordinal))
+                {
+                    weldingTotal++;
+                    if (assignment.isCompleted)
+                    {
+                        weldingCompleted++;
+                    }
+                }
+            }
+
+            hasPendingWave = TryGetNextTaskWaveEtaSeconds(out float etaSeconds);
+            nextWaveEtaSeconds = hasPendingWave ? etaSeconds : 0f;
         }
 
         public int GetCurrentDayDifficultyTier()
@@ -723,6 +953,7 @@ namespace Game.Core
 
             if (HasDailyTaskAssignmentsForCurrentWorkday())
             {
+                EnsureWorkdayRuntimeInitialized();
                 return;
             }
 
@@ -732,6 +963,7 @@ namespace Game.Core
             }
 
             GenerateDailyTaskAssignmentsForCurrentWorkday();
+            EnsureWorkdayRuntimeInitialized();
         }
 
         public bool IsAssignedDailyTask(string taskType, string taskKey)
@@ -845,6 +1077,54 @@ namespace Game.Core
             _lastLaunchedDailyTaskKey = NormalizeTaskKey(taskKey);
         }
 
+        public bool CanLaunchTaskAtLocation(string taskType, string taskKey, out string reason)
+        {
+            reason = string.Empty;
+
+            if (_runFailed || _currentRunPhase != RunPhase.Work || _workdayCompleted)
+            {
+                reason = "Work tasks are unavailable right now.";
+                return false;
+            }
+
+            EnsureDailyAssignmentsForCurrentWorkday();
+            EnsureWorkdayRuntimeInitialized();
+
+            if (GetCurrentWorkHour() >= DefaultWorkdayEndHour)
+            {
+                reason = "Shift has ended for today.";
+                return false;
+            }
+
+            string normalizedType = NormalizeTaskType(taskType);
+            string normalizedKey = NormalizeTaskKey(taskKey);
+            if (string.IsNullOrEmpty(normalizedType) || string.IsNullOrEmpty(normalizedKey))
+            {
+                reason = "Task is unavailable.";
+                return false;
+            }
+
+            if (!IsAssignedDailyTask(normalizedType, normalizedKey))
+            {
+                reason = "This station is not assigned right now.";
+                return false;
+            }
+
+            if (!IsTaskKeyUnlocked(normalizedKey))
+            {
+                reason = "This task wave is not unlocked yet.";
+                return false;
+            }
+
+            if (IsAssignedDailyTaskCompleted(normalizedType, normalizedKey))
+            {
+                reason = "This task is already completed.";
+                return false;
+            }
+
+            return true;
+        }
+
         public List<DailyTaskAssignmentData> GetDailyTaskAssignmentsForSave()
         {
             List<DailyTaskAssignmentData> savedAssignments = new List<DailyTaskAssignmentData>();
@@ -942,6 +1222,73 @@ namespace Game.Core
             if (_currentRunPhase == RunPhase.Work)
             {
                 EnsureDailyAssignmentsForCurrentWorkday();
+                EnsureWorkdayRuntimeInitialized();
+            }
+        }
+
+        public void RestoreWorkdayRuntimeFromSave(
+            float savedCurrentWorkHour,
+            int savedNextTaskWaveIndex,
+            List<GeneratedTaskWaveData> savedGeneratedTaskWaves,
+            List<string> savedUnlockedTaskKeys)
+        {
+            _currentWorkHour = Mathf.Clamp(savedCurrentWorkHour, DefaultWorkdayStartHour, DefaultWorkdayEndHour);
+            _nextTaskWaveIndex = Mathf.Max(0, savedNextTaskWaveIndex);
+            _generatedTaskWaves.Clear();
+            _unlockedTaskKeys.Clear();
+
+            if (savedGeneratedTaskWaves != null)
+            {
+                for (int i = 0; i < savedGeneratedTaskWaves.Count; i++)
+                {
+                    GeneratedTaskWaveData savedWave = savedGeneratedTaskWaves[i];
+                    if (savedWave == null)
+                    {
+                        continue;
+                    }
+
+                    GeneratedTaskWave runtimeWave = new GeneratedTaskWave
+                    {
+                        unlockHour = Mathf.Clamp(savedWave.unlockHour, DefaultWorkdayStartHour, DefaultWorkdayEndHour),
+                        taskKeys = new List<string>()
+                    };
+
+                    if (savedWave.taskKeys != null)
+                    {
+                        for (int k = 0; k < savedWave.taskKeys.Count; k++)
+                        {
+                            string normalized = NormalizeTaskKey(savedWave.taskKeys[k]);
+                            if (!string.IsNullOrEmpty(normalized) && !runtimeWave.taskKeys.Contains(normalized))
+                            {
+                                runtimeWave.taskKeys.Add(normalized);
+                            }
+                        }
+                    }
+
+                    _generatedTaskWaves.Add(runtimeWave);
+                }
+            }
+
+            if (_nextTaskWaveIndex > _generatedTaskWaves.Count)
+            {
+                _nextTaskWaveIndex = _generatedTaskWaves.Count;
+            }
+
+            if (savedUnlockedTaskKeys != null)
+            {
+                for (int i = 0; i < savedUnlockedTaskKeys.Count; i++)
+                {
+                    AddUnlockedTaskKey(savedUnlockedTaskKeys[i]);
+                }
+            }
+
+            _workdayRuntimeInitialized = _generatedTaskWaves.Count > 0 || _unlockedTaskKeys.Count > 0;
+
+            if (_currentRunPhase == RunPhase.Work)
+            {
+                EnsureDailyAssignmentsForCurrentWorkday();
+                EnsureWorkdayRuntimeInitialized();
+                CatchUpDueTaskWaves();
             }
         }
 
@@ -1228,6 +1575,7 @@ namespace Game.Core
             }
 
             _currentRunPhase = RunPhase.Home;
+            ResetWorkdayRuntimeState();
             return true;
         }
 
@@ -1262,6 +1610,12 @@ namespace Game.Core
                 return false;
             }
 
+            if (ShouldBeginCurrentDayFromHomeStaging())
+            {
+                BeginCurrentDayFromHomeStaging();
+                return true;
+            }
+
             _currentDay = Mathf.Max(1, _currentDay) + 1;
             _workdayCompleted = false;
             ClearDayWorkEarnings();
@@ -1270,11 +1624,35 @@ namespace Game.Core
             _currentRunPhase = RunPhase.Work;
             ClearDailyTaskAssignments();
             EnsureDailyAssignmentsForCurrentWorkday();
+            ResetWorkdayRuntimeState();
+            EnsureWorkdayRuntimeInitialized();
             return true;
         }
 
         public bool TryStartNextDayAndRouteToGameplayScene()
         {
+            bool started = StartNextDay();
+            if (!started)
+            {
+                return false;
+            }
+
+            if (_runFailed || _currentRunPhase != RunPhase.Work)
+            {
+                return true;
+            }
+
+            TryRouteToRunPhaseScene(_currentRunPhase);
+            return true;
+        }
+
+        public bool TryBeginWorkdayFromHomeAndRouteToGameplayScene()
+        {
+            if (_currentRunPhase != RunPhase.Home)
+            {
+                return false;
+            }
+
             bool started = StartNextDay();
             if (!started)
             {
@@ -1308,6 +1686,7 @@ namespace Game.Core
             _runFailed = true;
             _currentRunPhase = RunPhase.GameOver;
             _runFailedReason = string.IsNullOrWhiteSpace(reason) ? string.Empty : reason.Trim();
+            ResetWorkdayRuntimeState();
 
             if (TryBuildSaveContext(out SaveManager.SaveContext saveContext, out string saveContextFailureReason))
             {
@@ -1439,7 +1818,7 @@ namespace Game.Core
             EventBus.Publish(new CurrencyChangedEvent(_currency));
 
             _currentDay = 1;
-            _currentRunPhase = RunPhase.Work;
+            _currentRunPhase = RunPhase.Home;
             _workdayCompleted = false;
             _consecutiveFailedWorkdays = 0;
             _runFailed = false;
@@ -1449,6 +1828,7 @@ namespace Game.Core
             ClearDayWorkEarnings();
             ClearStolenLootThisDay();
             ClearDailyTaskAssignments();
+            ResetWorkdayRuntimeState();
             _ownedToolTiers.Clear();
 
             _hasRoutedAfterFailure = false;
@@ -1460,6 +1840,8 @@ namespace Game.Core
         private void NormalizeRestoredRunProgressInvariants()
         {
             List<string> normalizedIssues = new List<string>();
+
+            _currentWorkHour = Mathf.Clamp(_currentWorkHour, DefaultWorkdayStartHour, DefaultWorkdayEndHour);
 
             if (_currentRunPhase != RunPhase.Work && _dayWorkEarnings > 0)
             {
@@ -1499,6 +1881,11 @@ namespace Game.Core
             {
                 _failedLieEscalationCountThisDay = 0;
                 normalizedIssues.Add("Clamped failedLieEscalationCountThisDay to non-negative value");
+            }
+
+            if (_currentRunPhase != RunPhase.Work)
+            {
+                ResetWorkdayRuntimeState();
             }
 
             if (normalizedIssues.Count > 0)
@@ -1593,6 +1980,7 @@ namespace Game.Core
             AppendRandomAssignments(DailyTaskTypeWelding, weldingKeys, weldingAssignmentTarget);
 
             _dailyTaskAssignmentDay = _currentDay;
+            RebuildTaskWaveScheduleForCurrentWorkday();
         }
 
         private bool IsCurrentWorkdayCompletionRuleSatisfied()
@@ -1617,6 +2005,289 @@ namespace Game.Core
             }
 
             return _dailyTaskAssignments.Count > 0;
+        }
+
+        private void TickWorkdayRuntime()
+        {
+            if (_currentRunPhase != RunPhase.Work || _workdayCompleted || _runFailed)
+            {
+                return;
+            }
+
+            if (_currentState != GameState.FreePlay)
+            {
+                return;
+            }
+
+            PauseManager pauseManager = PauseManager.Instance;
+            if (pauseManager != null && pauseManager.IsPaused)
+            {
+                return;
+            }
+
+            EnsureDailyAssignmentsForCurrentWorkday();
+            EnsureWorkdayRuntimeInitialized();
+
+            if (_generatedTaskWaves.Count == 0)
+            {
+                return;
+            }
+
+            float shiftHours = DefaultWorkdayEndHour - DefaultWorkdayStartHour;
+            float durationSeconds = Mathf.Max(1f, _workdayDurationMinutes * 60f);
+            float hoursPerSecond = shiftHours / durationSeconds;
+            _currentWorkHour = Mathf.Clamp(_currentWorkHour + (Time.deltaTime * hoursPerSecond), DefaultWorkdayStartHour, DefaultWorkdayEndHour);
+
+            CatchUpDueTaskWaves();
+        }
+
+        private float ConvertRealMinutesToWorkHourDelta(float realMinutes)
+        {
+            float clampedRealMinutes = Mathf.Max(0f, realMinutes);
+            float durationMinutes = Mathf.Max(0.01f, _workdayDurationMinutes);
+            float shiftHours = DefaultWorkdayEndHour - DefaultWorkdayStartHour;
+            return (clampedRealMinutes / durationMinutes) * shiftHours;
+        }
+
+        private float GetEffectiveLateWaveCutoffHour()
+        {
+            float cutoffByConfig = Mathf.Clamp(_lateWaveCutoffHour, DefaultWorkdayStartHour, DefaultWorkdayEndHour);
+            float safetyBufferHours = Mathf.Max(1f, _lateWaveSafetyBufferMinutes) / 60f;
+            float cutoffByBuffer = DefaultWorkdayEndHour - safetyBufferHours;
+            return Mathf.Clamp(Mathf.Min(cutoffByConfig, cutoffByBuffer), DefaultWorkdayStartHour, DefaultWorkdayEndHour);
+        }
+
+        private void EnsureWorkdayRuntimeInitialized()
+        {
+            if (_currentRunPhase != RunPhase.Work)
+            {
+                return;
+            }
+
+            if (_workdayRuntimeInitialized)
+            {
+                return;
+            }
+
+            RebuildTaskWaveScheduleForCurrentWorkday();
+        }
+
+        private void RebuildTaskWaveScheduleForCurrentWorkday()
+        {
+            _generatedTaskWaves.Clear();
+            _unlockedTaskKeys.Clear();
+            _nextTaskWaveIndex = 0;
+            _currentWorkHour = Mathf.Clamp(_currentWorkHour, DefaultWorkdayStartHour, DefaultWorkdayEndHour);
+
+            List<string> pendingKeys = new List<string>();
+            for (int i = 0; i < _dailyTaskAssignments.Count; i++)
+            {
+                DailyTaskAssignment assignment = _dailyTaskAssignments[i];
+                if (assignment == null || assignment.isCompleted)
+                {
+                    continue;
+                }
+
+                string normalizedKey = NormalizeTaskKey(assignment.taskKey);
+                if (!string.IsNullOrEmpty(normalizedKey) && !pendingKeys.Contains(normalizedKey))
+                {
+                    pendingKeys.Add(normalizedKey);
+                }
+            }
+
+            if (pendingKeys.Count <= 0)
+            {
+                _workdayRuntimeInitialized = true;
+                return;
+            }
+
+            GeneratedTaskWave firstWave = new GeneratedTaskWave
+            {
+                unlockHour = DefaultWorkdayStartHour,
+                taskKeys = new List<string>()
+            };
+
+            int firstWaveCount;
+            if (pendingKeys.Count <= 1)
+            {
+                firstWaveCount = 1;
+            }
+            else
+            {
+                int maxFirstWaveCount = Mathf.Min(2, pendingKeys.Count - 1);
+                firstWaveCount = Mathf.Clamp(maxFirstWaveCount, 1, pendingKeys.Count);
+            }
+            for (int i = 0; i < firstWaveCount; i++)
+            {
+                firstWave.taskKeys.Add(pendingKeys[i]);
+            }
+
+            _generatedTaskWaves.Add(firstWave);
+
+            int nextKeyIndex = firstWaveCount;
+            float nextWaveHour = DefaultWorkdayStartHour;
+            float minDelayMinutes = Mathf.Max(0.5f, Mathf.Min(_waveDelayMinMinutes, _waveDelayMaxMinutes));
+            float maxDelayMinutes = Mathf.Max(minDelayMinutes, _waveDelayMaxMinutes);
+            float effectiveCutoffHour = GetEffectiveLateWaveCutoffHour();
+
+            while (nextKeyIndex < pendingKeys.Count)
+            {
+                float delayMinutesRealTime = UnityEngine.Random.Range(minDelayMinutes, maxDelayMinutes);
+                nextWaveHour += ConvertRealMinutesToWorkHourDelta(delayMinutesRealTime);
+                if (nextWaveHour > effectiveCutoffHour)
+                {
+                    break;
+                }
+
+                GeneratedTaskWave wave = new GeneratedTaskWave
+                {
+                    unlockHour = Mathf.Clamp(nextWaveHour, DefaultWorkdayStartHour, DefaultWorkdayEndHour),
+                    taskKeys = new List<string>()
+                };
+
+                int tasksInWave = Mathf.Min(2, pendingKeys.Count - nextKeyIndex);
+                for (int i = 0; i < tasksInWave; i++)
+                {
+                    wave.taskKeys.Add(pendingKeys[nextKeyIndex + i]);
+                }
+
+                nextKeyIndex += tasksInWave;
+                _generatedTaskWaves.Add(wave);
+            }
+
+            // Ensure all assignments are eventually unlockable even if cutoff is early.
+            if (nextKeyIndex < pendingKeys.Count)
+            {
+                GeneratedTaskWave fallbackWave = new GeneratedTaskWave
+                {
+                    unlockHour = effectiveCutoffHour,
+                    taskKeys = new List<string>()
+                };
+
+                while (nextKeyIndex < pendingKeys.Count)
+                {
+                    fallbackWave.taskKeys.Add(pendingKeys[nextKeyIndex]);
+                    nextKeyIndex++;
+                }
+
+                _generatedTaskWaves.Add(fallbackWave);
+            }
+
+            _workdayRuntimeInitialized = true;
+            CatchUpDueTaskWaves();
+        }
+
+        private void CatchUpDueTaskWaves()
+        {
+            if (_generatedTaskWaves.Count <= 0)
+            {
+                return;
+            }
+
+            if (_nextTaskWaveIndex < 0)
+            {
+                _nextTaskWaveIndex = 0;
+            }
+
+            float nowHour = GetCurrentWorkHour();
+            while (_nextTaskWaveIndex < _generatedTaskWaves.Count)
+            {
+                GeneratedTaskWave wave = _generatedTaskWaves[_nextTaskWaveIndex];
+                if (wave == null)
+                {
+                    _nextTaskWaveIndex++;
+                    continue;
+                }
+
+                if (wave.unlockHour > nowHour + 0.0001f)
+                {
+                    break;
+                }
+
+                if (wave.taskKeys != null)
+                {
+                    for (int k = 0; k < wave.taskKeys.Count; k++)
+                    {
+                        AddUnlockedTaskKey(wave.taskKeys[k]);
+                    }
+                }
+
+                _nextTaskWaveIndex++;
+            }
+        }
+
+        private void AddUnlockedTaskKey(string taskKey)
+        {
+            string normalizedKey = NormalizeTaskKey(taskKey);
+            if (string.IsNullOrEmpty(normalizedKey) || _unlockedTaskKeys.Contains(normalizedKey))
+            {
+                return;
+            }
+
+            _unlockedTaskKeys.Add(normalizedKey);
+        }
+
+        private bool IsTaskKeyUnlocked(string taskKey)
+        {
+            string normalizedKey = NormalizeTaskKey(taskKey);
+            return !string.IsNullOrEmpty(normalizedKey) && _unlockedTaskKeys.Contains(normalizedKey);
+        }
+
+        private bool IsAssignedDailyTaskCompleted(string taskType, string taskKey)
+        {
+            string normalizedType = NormalizeTaskType(taskType);
+            string normalizedKey = NormalizeTaskKey(taskKey);
+            if (string.IsNullOrEmpty(normalizedType) || string.IsNullOrEmpty(normalizedKey))
+            {
+                return false;
+            }
+
+            for (int i = 0; i < _dailyTaskAssignments.Count; i++)
+            {
+                DailyTaskAssignment assignment = _dailyTaskAssignments[i];
+                if (assignment == null)
+                {
+                    continue;
+                }
+
+                if (string.Equals(assignment.taskType, normalizedType, StringComparison.Ordinal)
+                    && string.Equals(assignment.taskKey, normalizedKey, StringComparison.Ordinal))
+                {
+                    return assignment.isCompleted;
+                }
+            }
+
+            return false;
+        }
+
+        private bool ShouldBeginCurrentDayFromHomeStaging()
+        {
+            return _currentDay <= 1
+                && !_workdayCompleted
+                && _currentRunPhase == RunPhase.Home
+                && !HasDailyTaskAssignmentsForCurrentWorkday();
+        }
+
+        private void BeginCurrentDayFromHomeStaging()
+        {
+            _workdayCompleted = false;
+            ClearDayWorkEarnings();
+            ClearStolenLootThisDay();
+            ClearFailedLieEscalationCountThisDay();
+            _currentRunPhase = RunPhase.Work;
+            ClearDailyTaskAssignments();
+            ResetWorkdayRuntimeState();
+            EnsureDailyAssignmentsForCurrentWorkday();
+            EnsureWorkdayRuntimeInitialized();
+        }
+
+        private void ResetWorkdayRuntimeState()
+        {
+            _currentWorkHour = DefaultWorkdayStartHour;
+            _nextTaskWaveIndex = 0;
+            _generatedTaskWaves.Clear();
+            _unlockedTaskKeys.Clear();
+            _workdayRuntimeInitialized = false;
         }
 
         private void FinalizeSuccessfulWorkday()
@@ -1931,6 +2602,7 @@ namespace Game.Core
             _dailyTaskAssignments.Clear();
             _dailyTaskAssignmentDay = -1;
             ClearPendingDailyTaskLaunchContext();
+            ResetWorkdayRuntimeState();
         }
 
         private bool IsRunPhaseTransitionBlocked(out string failureReason)

@@ -104,11 +104,15 @@ namespace Game.Core
                 data.currentDay = context.GameManager.GetCurrentDay();
                 data.currentRunPhase = (int)context.GameManager.GetCurrentRunPhase();
                 data.workdayCompleted = context.GameManager.IsWorkdayCompleted();
+                data.currentWorkHour = context.GameManager.GetCurrentWorkHourForSave();
+                data.nextTaskWaveIndex = context.GameManager.GetNextTaskWaveIndexForSave();
                 data.consecutiveFailedWorkdays = context.GameManager.GetConsecutiveFailedWorkdays();
                 data.runFailed = context.GameManager.IsRunFailed();
                 data.runFailedReason = context.GameManager.GetRunFailedReason();
                 data.failedLieEscalationCountThisDay = context.GameManager.GetFailedLieEscalationCountThisDay();
                 data.dailyTaskAssignments = context.GameManager.GetDailyTaskAssignmentsForSave();
+                data.generatedTaskWaves = context.GameManager.GetGeneratedTaskWavesForSave();
+                data.unlockedTaskKeys = context.GameManager.GetUnlockedTaskKeysForSave();
                 data.stolenLootThisDay = context.GameManager.GetStolenLootThisDaySnapshot();
 
                 if (context.GameManager.TryGetAuthoritativePlayerTransform(out Transform playerTransform) && playerTransform != null)
@@ -216,6 +220,11 @@ namespace Game.Core
                     data.runFailedReason);
                 context.GameManager.RestoreFailedLieEscalationCountThisDayFromSave(data.failedLieEscalationCountThisDay);
                 context.GameManager.RestoreDailyTaskAssignmentsFromSave(data.dailyTaskAssignments);
+                context.GameManager.RestoreWorkdayRuntimeFromSave(
+                    data.currentWorkHour,
+                    data.nextTaskWaveIndex,
+                    data.generatedTaskWaves,
+                    data.unlockedTaskKeys);
                 context.GameManager.RestoreStolenLootThisDayFromSave(data.stolenLootThisDay);
                 context.GameManager.RestoreOwnedToolUpgradesFromSave(data.ownedTools);
 
@@ -289,6 +298,52 @@ namespace Game.Core
             catch (System.Exception e)
             {
                 Debug.LogWarning($"[SaveManager] Failed to read run failure metadata: {e.Message}");
+                return false;
+            }
+        }
+
+        /// <summary>
+        /// Read run-phase resume metadata from save without requiring gameplay dependencies.
+        /// Returns true when metadata was read successfully.
+        /// </summary>
+        public static bool TryReadRunResumeMeta(out int currentRunPhase, out int currentDay, out bool runFailed)
+        {
+            currentRunPhase = (int)GameManager.RunPhase.Home;
+            currentDay = 1;
+            runFailed = false;
+
+            try
+            {
+                if (!System.IO.File.Exists(SaveFilePath))
+                {
+                    return false;
+                }
+
+                string json = System.IO.File.ReadAllText(SaveFilePath);
+                if (string.IsNullOrWhiteSpace(json))
+                {
+                    return false;
+                }
+
+                SaveData data = JsonUtility.FromJson<SaveData>(json);
+                if (data == null)
+                {
+                    return false;
+                }
+
+                currentDay = Mathf.Max(1, data.currentDay);
+                if (data.currentRunPhase >= (int)GameManager.RunPhase.Work
+                    && data.currentRunPhase <= (int)GameManager.RunPhase.GameOver)
+                {
+                    currentRunPhase = data.currentRunPhase;
+                }
+
+                runFailed = data.runFailed || currentRunPhase == (int)GameManager.RunPhase.GameOver;
+                return true;
+            }
+            catch (System.Exception e)
+            {
+                Debug.LogWarning($"[SaveManager] Failed to read run resume metadata: {e.Message}");
                 return false;
             }
         }
