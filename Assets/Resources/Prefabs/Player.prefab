@@ -299,11 +299,11 @@ MonoBehaviour:
   m_Name: 
   m_EditorClassIdentifier: Assembly-CSharp::Game.Player.FirstPersonCamera
   _horizontalRotationTarget: {fileID: 0}
-  _mouseSensitivity: 0.7
+  _mouseSensitivity: 0.46
   _verticalClampMin: -80
   _verticalClampMax: 80
   _useSmoothInput: 1
-  _smoothInputSpeed: 0.2
+  _smoothInputSpeed: 0.1
   _lockCursorDuringFreePlay: 1
   _startupLookIgnoreFrames: 2
   _hideLocalBodyFromOwnCamera: 1

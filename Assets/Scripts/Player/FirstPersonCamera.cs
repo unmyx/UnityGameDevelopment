@@ -35,7 +35,7 @@ namespace Game.Player
 
         [Header("Sensitivity")]
         [SerializeField]
-        private float _mouseSensitivity = 0.7f;
+        private float _mouseSensitivity = 0.46f;
 
         [Header("Vertical Look Limits")]
         [SerializeField]
@@ -50,7 +50,7 @@ namespace Game.Player
 
         [SerializeField]
         [Range(0.1f, 1f)]
-        private float _smoothInputSpeed = 0.2f;
+        private float _smoothInputSpeed = 0.1f;
 
         [Header("Cursor")]
         [SerializeField]
