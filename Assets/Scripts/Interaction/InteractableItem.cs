@@ -222,6 +222,15 @@ namespace Game.Interaction
             return TryGetPersistentCollectibleId(out collectibleId, logWarning: false);
         }
 
+        public void ConfigureRuntimePersistenceId(string collectibleId)
+        {
+            _persistCollectedState = true;
+            _collectiblePersistenceId = string.IsNullOrWhiteSpace(collectibleId)
+                ? string.Empty
+                : collectibleId.Trim();
+            _hasLoggedMissingPersistenceId = false;
+        }
+
         public void ApplyConsumedPersistenceState()
         {
             _hasBeenPickedUp = true;

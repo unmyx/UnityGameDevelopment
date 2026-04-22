@@ -2856,6 +2856,294 @@ Transform:
   m_CorrespondingSourceObject: {fileID: 1662311543438403523, guid: 721ee5bba86aa994a992eefee8605742, type: 3}
   m_PrefabInstance: {fileID: 7401495678298981854}
   m_PrefabAsset: {fileID: 0}
+--- !u!1 &910100001
+GameObject:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  serializedVersion: 6
+  m_Component:
+  - component: {fileID: 910100002}
+  - component: {fileID: 910100003}
+  m_Layer: 0
+  m_Name: LootSpawnPoint_Gold_01
+  m_TagString: Untagged
+  m_Icon: {fileID: 0}
+  m_NavMeshLayer: 0
+  m_StaticEditorFlags: 0
+  m_IsActive: 1
+--- !u!4 &910100002
+Transform:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 910100001}
+  serializedVersion: 2
+  m_LocalRotation: {x: 0, y: 0, z: 0, w: 1}
+  m_LocalPosition: {x: 10.267934, y: 1.04, z: 3.98}
+  m_LocalScale: {x: 1, y: 1, z: 1}
+  m_ConstrainProportionsScale: 0
+  m_Children: []
+  m_Father: {fileID: 1568219681}
+  m_LocalEulerAnglesHint: {x: 0, y: 0, z: 0}
+--- !u!114 &910100003
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 910100001}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: 50b576f227b24e4699e1f8e9f00ad4d1, type: 3}
+  m_Name: 
+  m_EditorClassIdentifier: Assembly-CSharp::Game.Interaction.LootSpawnPoint
+  _pointId: gold_01
+  _lootTypeId: wedding_ring_gold
+  _drawGizmo: 1
+  _gizmoColor: {r: 1, g: 0.75, b: 0.2, a: 1}
+--- !u!1 &910100011
+GameObject:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  serializedVersion: 6
+  m_Component:
+  - component: {fileID: 910100012}
+  - component: {fileID: 910100013}
+  m_Layer: 0
+  m_Name: LootSpawnPoint_Gold_02
+  m_TagString: Untagged
+  m_Icon: {fileID: 0}
+  m_NavMeshLayer: 0
+  m_StaticEditorFlags: 0
+  m_IsActive: 1
+--- !u!4 &910100012
+Transform:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 910100011}
+  serializedVersion: 2
+  m_LocalRotation: {x: 0, y: 0, z: 0, w: 1}
+  m_LocalPosition: {x: 9.15, y: 1, z: 5.25}
+  m_LocalScale: {x: 1, y: 1, z: 1}
+  m_ConstrainProportionsScale: 0
+  m_Children: []
+  m_Father: {fileID: 1568219681}
+  m_LocalEulerAnglesHint: {x: 0, y: 0, z: 0}
+--- !u!114 &910100013
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 910100011}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: 50b576f227b24e4699e1f8e9f00ad4d1, type: 3}
+  m_Name: 
+  m_EditorClassIdentifier: Assembly-CSharp::Game.Interaction.LootSpawnPoint
+  _pointId: gold_02
+  _lootTypeId: wedding_ring_gold
+  _drawGizmo: 1
+  _gizmoColor: {r: 1, g: 0.75, b: 0.2, a: 1}
+--- !u!1 &910100021
+GameObject:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  serializedVersion: 6
+  m_Component:
+  - component: {fileID: 910100022}
+  - component: {fileID: 910100023}
+  m_Layer: 0
+  m_Name: LootSpawnPoint_Gold_03
+  m_TagString: Untagged
+  m_Icon: {fileID: 0}
+  m_NavMeshLayer: 0
+  m_StaticEditorFlags: 0
+  m_IsActive: 1
+--- !u!4 &910100022
+Transform:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 910100021}
+  serializedVersion: 2
+  m_LocalRotation: {x: 0, y: 0, z: 0, w: 1}
+  m_LocalPosition: {x: 11.4, y: 0.95, z: 4.6}
+  m_LocalScale: {x: 1, y: 1, z: 1}
+  m_ConstrainProportionsScale: 0
+  m_Children: []
+  m_Father: {fileID: 1568219681}
+  m_LocalEulerAnglesHint: {x: 0, y: 0, z: 0}
+--- !u!114 &910100023
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 910100021}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: 50b576f227b24e4699e1f8e9f00ad4d1, type: 3}
+  m_Name: 
+  m_EditorClassIdentifier: Assembly-CSharp::Game.Interaction.LootSpawnPoint
+  _pointId: gold_03
+  _lootTypeId: wedding_ring_gold
+  _drawGizmo: 1
+  _gizmoColor: {r: 1, g: 0.75, b: 0.2, a: 1}
+--- !u!1 &910100031
+GameObject:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  serializedVersion: 6
+  m_Component:
+  - component: {fileID: 910100032}
+  - component: {fileID: 910100033}
+  m_Layer: 0
+  m_Name: LootSpawnPoint_Silver_01
+  m_TagString: Untagged
+  m_Icon: {fileID: 0}
+  m_NavMeshLayer: 0
+  m_StaticEditorFlags: 0
+  m_IsActive: 1
+--- !u!4 &910100032
+Transform:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 910100031}
+  serializedVersion: 2
+  m_LocalRotation: {x: 0, y: 0, z: 0, w: 1}
+  m_LocalPosition: {x: 7.47165, y: 0.68, z: 11.18191}
+  m_LocalScale: {x: 1, y: 1, z: 1}
+  m_ConstrainProportionsScale: 0
+  m_Children: []
+  m_Father: {fileID: 1568219681}
+  m_LocalEulerAnglesHint: {x: 0, y: 0, z: 0}
+--- !u!114 &910100033
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 910100031}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: 50b576f227b24e4699e1f8e9f00ad4d1, type: 3}
+  m_Name: 
+  m_EditorClassIdentifier: Assembly-CSharp::Game.Interaction.LootSpawnPoint
+  _pointId: silver_01
+  _lootTypeId: wedding_ring_silver
+  _drawGizmo: 1
+  _gizmoColor: {r: 1, g: 0.75, b: 0.2, a: 1}
+--- !u!1 &910100041
+GameObject:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  serializedVersion: 6
+  m_Component:
+  - component: {fileID: 910100042}
+  - component: {fileID: 910100043}
+  m_Layer: 0
+  m_Name: LootSpawnPoint_Silver_02
+  m_TagString: Untagged
+  m_Icon: {fileID: 0}
+  m_NavMeshLayer: 0
+  m_StaticEditorFlags: 0
+  m_IsActive: 1
+--- !u!4 &910100042
+Transform:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 910100041}
+  serializedVersion: 2
+  m_LocalRotation: {x: 0, y: 0, z: 0, w: 1}
+  m_LocalPosition: {x: 6.6, y: 0.72, z: 9.8}
+  m_LocalScale: {x: 1, y: 1, z: 1}
+  m_ConstrainProportionsScale: 0
+  m_Children: []
+  m_Father: {fileID: 1568219681}
+  m_LocalEulerAnglesHint: {x: 0, y: 0, z: 0}
+--- !u!114 &910100043
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 910100041}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: 50b576f227b24e4699e1f8e9f00ad4d1, type: 3}
+  m_Name: 
+  m_EditorClassIdentifier: Assembly-CSharp::Game.Interaction.LootSpawnPoint
+  _pointId: silver_02
+  _lootTypeId: wedding_ring_silver
+  _drawGizmo: 1
+  _gizmoColor: {r: 1, g: 0.75, b: 0.2, a: 1}
+--- !u!1 &910100051
+GameObject:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  serializedVersion: 6
+  m_Component:
+  - component: {fileID: 910100052}
+  - component: {fileID: 910100053}
+  m_Layer: 0
+  m_Name: LootSpawnPoint_Silver_03
+  m_TagString: Untagged
+  m_Icon: {fileID: 0}
+  m_NavMeshLayer: 0
+  m_StaticEditorFlags: 0
+  m_IsActive: 1
+--- !u!4 &910100052
+Transform:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 910100051}
+  serializedVersion: 2
+  m_LocalRotation: {x: 0, y: 0, z: 0, w: 1}
+  m_LocalPosition: {x: 8.9, y: 0.75, z: 10.45}
+  m_LocalScale: {x: 1, y: 1, z: 1}
+  m_ConstrainProportionsScale: 0
+  m_Children: []
+  m_Father: {fileID: 1568219681}
+  m_LocalEulerAnglesHint: {x: 0, y: 0, z: 0}
+--- !u!114 &910100053
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 910100051}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: 50b576f227b24e4699e1f8e9f00ad4d1, type: 3}
+  m_Name: 
+  m_EditorClassIdentifier: Assembly-CSharp::Game.Interaction.LootSpawnPoint
+  _pointId: silver_03
+  _lootTypeId: wedding_ring_silver
+  _drawGizmo: 1
+  _gizmoColor: {r: 1, g: 0.75, b: 0.2, a: 1}
 --- !u!4 &931940750 stripped
 Transform:
   m_CorrespondingSourceObject: {fileID: 3082511124391958675, guid: d824a33a367fe2d44abf4d63120c45f6, type: 3}
@@ -4757,6 +5045,7 @@ GameObject:
   serializedVersion: 6
   m_Component:
   - component: {fileID: 1568219681}
+  - component: {fileID: 1568219682}
   m_Layer: 0
   m_Name: LootSpawns
   m_TagString: Untagged
@@ -4777,10 +5066,39 @@ Transform:
   m_LocalScale: {x: 1, y: 1, z: 1}
   m_ConstrainProportionsScale: 0
   m_Children:
-  - {fileID: 543450652419200841}
-  - {fileID: 543450652215090147}
+  - {fileID: 910100002}
+  - {fileID: 910100012}
+  - {fileID: 910100022}
+  - {fileID: 910100032}
+  - {fileID: 910100042}
+  - {fileID: 910100052}
   m_Father: {fileID: 724174522}
   m_LocalEulerAnglesHint: {x: 0, y: 0, z: 0}
+--- !u!114 &1568219682
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 1568219680}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: 278132744cde4e1e9d67baf9228ccff9, type: 3}
+  m_Name: 
+  m_EditorClassIdentifier: Assembly-CSharp::Game.Interaction.LootSpawnController
+  _lootEntries:
+  - lootTypeId: wedding_ring_silver
+    lootPrefab: {fileID: 4596119888003858957, guid: b000145df1cb27a49b69cfc3ceb3c4cc, type: 3}
+    guaranteedCount: 1
+    extraSpawnChance: 0.5
+    maxExtraCount: 2
+  - lootTypeId: wedding_ring_gold
+    lootPrefab: {fileID: 7905953786737193585, guid: 5e4f4c92c881d8c4ab64e1aecb648edb, type: 3}
+    guaranteedCount: 1
+    extraSpawnChance: 0.5
+    maxExtraCount: 2
+  _seedOffset: 104729
+  _dayCheckIntervalSeconds: 0.5
 --- !u!1 &1582545703 stripped
 GameObject:
   m_CorrespondingSourceObject: {fileID: 919132149155446097, guid: 817ecd1efb06c5b46a3acb5ab11c5144, type: 3}
@@ -6852,73 +7170,6 @@ MonoBehaviour:
   m_Script: {fileID: 11500000, guid: a0ad55783db41f948aed78baecdd3594, type: 3}
   m_Name: 
   m_EditorClassIdentifier: Assembly-CSharp::Game.Inventory.InventorySystem
---- !u!4 &543450652215090147 stripped
-Transform:
-  m_CorrespondingSourceObject: {fileID: 2005575113876301631, guid: b000145df1cb27a49b69cfc3ceb3c4cc, type: 3}
-  m_PrefabInstance: {fileID: 804091420933915897}
-  m_PrefabAsset: {fileID: 0}
---- !u!4 &543450652419200841 stripped
-Transform:
-  m_CorrespondingSourceObject: {fileID: 2656290652946694253, guid: 5e4f4c92c881d8c4ab64e1aecb648edb, type: 3}
-  m_PrefabInstance: {fileID: 1188168328685663926}
-  m_PrefabAsset: {fileID: 0}
---- !u!1001 &804091420933915897
-PrefabInstance:
-  m_ObjectHideFlags: 0
-  serializedVersion: 2
-  m_Modification:
-    serializedVersion: 3
-    m_TransformParent: {fileID: 1568219681}
-    m_Modifications:
-    - target: {fileID: 2005575113876301631, guid: b000145df1cb27a49b69cfc3ceb3c4cc, type: 3}
-      propertyPath: m_LocalPosition.x
-      value: 7.47165
-      objectReference: {fileID: 0}
-    - target: {fileID: 2005575113876301631, guid: b000145df1cb27a49b69cfc3ceb3c4cc, type: 3}
-      propertyPath: m_LocalPosition.y
-      value: 0.68
-      objectReference: {fileID: 0}
-    - target: {fileID: 2005575113876301631, guid: b000145df1cb27a49b69cfc3ceb3c4cc, type: 3}
-      propertyPath: m_LocalPosition.z
-      value: 11.18191
-      objectReference: {fileID: 0}
-    - target: {fileID: 2005575113876301631, guid: b000145df1cb27a49b69cfc3ceb3c4cc, type: 3}
-      propertyPath: m_LocalRotation.w
-      value: 1
-      objectReference: {fileID: 0}
-    - target: {fileID: 2005575113876301631, guid: b000145df1cb27a49b69cfc3ceb3c4cc, type: 3}
-      propertyPath: m_LocalRotation.x
-      value: -0
-      objectReference: {fileID: 0}
-    - target: {fileID: 2005575113876301631, guid: b000145df1cb27a49b69cfc3ceb3c4cc, type: 3}
-      propertyPath: m_LocalRotation.y
-      value: -0
-      objectReference: {fileID: 0}
-    - target: {fileID: 2005575113876301631, guid: b000145df1cb27a49b69cfc3ceb3c4cc, type: 3}
-      propertyPath: m_LocalRotation.z
-      value: -0
-      objectReference: {fileID: 0}
-    - target: {fileID: 2005575113876301631, guid: b000145df1cb27a49b69cfc3ceb3c4cc, type: 3}
-      propertyPath: m_LocalEulerAnglesHint.x
-      value: 0
-      objectReference: {fileID: 0}
-    - target: {fileID: 2005575113876301631, guid: b000145df1cb27a49b69cfc3ceb3c4cc, type: 3}
-      propertyPath: m_LocalEulerAnglesHint.y
-      value: 0
-      objectReference: {fileID: 0}
-    - target: {fileID: 2005575113876301631, guid: b000145df1cb27a49b69cfc3ceb3c4cc, type: 3}
-      propertyPath: m_LocalEulerAnglesHint.z
-      value: 0
-      objectReference: {fileID: 0}
-    - target: {fileID: 4596119888003858957, guid: b000145df1cb27a49b69cfc3ceb3c4cc, type: 3}
-      propertyPath: m_Name
-      value: SilverRingPickup
-      objectReference: {fileID: 0}
-    m_RemovedComponents: []
-    m_RemovedGameObjects: []
-    m_AddedGameObjects: []
-    m_AddedComponents: []
-  m_SourcePrefab: {fileID: 100100000, guid: b000145df1cb27a49b69cfc3ceb3c4cc, type: 3}
 --- !u!1 &873421550900112345
 GameObject:
   m_ObjectHideFlags: 0
@@ -7165,63 +7416,6 @@ PrefabInstance:
     m_AddedGameObjects: []
     m_AddedComponents: []
   m_SourcePrefab: {fileID: 100100000, guid: f16f6030f0d368f46bb64170df257843, type: 3}
---- !u!1001 &1188168328685663926
-PrefabInstance:
-  m_ObjectHideFlags: 0
-  serializedVersion: 2
-  m_Modification:
-    serializedVersion: 3
-    m_TransformParent: {fileID: 1568219681}
-    m_Modifications:
-    - target: {fileID: 2656290652946694253, guid: 5e4f4c92c881d8c4ab64e1aecb648edb, type: 3}
-      propertyPath: m_LocalPosition.x
-      value: 10.267934
-      objectReference: {fileID: 0}
-    - target: {fileID: 2656290652946694253, guid: 5e4f4c92c881d8c4ab64e1aecb648edb, type: 3}
-      propertyPath: m_LocalPosition.y
-      value: 1.04
-      objectReference: {fileID: 0}
-    - target: {fileID: 2656290652946694253, guid: 5e4f4c92c881d8c4ab64e1aecb648edb, type: 3}
-      propertyPath: m_LocalPosition.z
-      value: 3.98
-      objectReference: {fileID: 0}
-    - target: {fileID: 2656290652946694253, guid: 5e4f4c92c881d8c4ab64e1aecb648edb, type: 3}
-      propertyPath: m_LocalRotation.w
-      value: 1
-      objectReference: {fileID: 0}
-    - target: {fileID: 2656290652946694253, guid: 5e4f4c92c881d8c4ab64e1aecb648edb, type: 3}
-      propertyPath: m_LocalRotation.x
-      value: -0
-      objectReference: {fileID: 0}
-    - target: {fileID: 2656290652946694253, guid: 5e4f4c92c881d8c4ab64e1aecb648edb, type: 3}
-      propertyPath: m_LocalRotation.y
-      value: -0
-      objectReference: {fileID: 0}
-    - target: {fileID: 2656290652946694253, guid: 5e4f4c92c881d8c4ab64e1aecb648edb, type: 3}
-      propertyPath: m_LocalRotation.z
-      value: -0
-      objectReference: {fileID: 0}
-    - target: {fileID: 2656290652946694253, guid: 5e4f4c92c881d8c4ab64e1aecb648edb, type: 3}
-      propertyPath: m_LocalEulerAnglesHint.x
-      value: 0
-      objectReference: {fileID: 0}
-    - target: {fileID: 2656290652946694253, guid: 5e4f4c92c881d8c4ab64e1aecb648edb, type: 3}
-      propertyPath: m_LocalEulerAnglesHint.y
-      value: 0
-      objectReference: {fileID: 0}
-    - target: {fileID: 2656290652946694253, guid: 5e4f4c92c881d8c4ab64e1aecb648edb, type: 3}
-      propertyPath: m_LocalEulerAnglesHint.z
-      value: 0
-      objectReference: {fileID: 0}
-    - target: {fileID: 7905953786737193585, guid: 5e4f4c92c881d8c4ab64e1aecb648edb, type: 3}
-      propertyPath: m_Name
-      value: GoldRingPickup
-      objectReference: {fileID: 0}
-    m_RemovedComponents: []
-    m_RemovedGameObjects: []
-    m_AddedGameObjects: []
-    m_AddedComponents: []
-  m_SourcePrefab: {fileID: 100100000, guid: 5e4f4c92c881d8c4ab64e1aecb648edb, type: 3}
 --- !u!1001 &2937669736458710909
 PrefabInstance:
   m_ObjectHideFlags: 0
