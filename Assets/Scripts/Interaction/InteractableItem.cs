@@ -231,6 +231,13 @@ namespace Game.Interaction
             _hasLoggedMissingPersistenceId = false;
         }
 
+        public void DisablePersistenceForRuntimeDrop()
+        {
+            _persistCollectedState = false;
+            _collectiblePersistenceId = string.Empty;
+            _hasLoggedMissingPersistenceId = false;
+        }
+
         public void ApplyConsumedPersistenceState()
         {
             _hasBeenPickedUp = true;

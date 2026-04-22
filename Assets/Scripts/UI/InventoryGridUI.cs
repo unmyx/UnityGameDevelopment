@@ -1,10 +1,13 @@
 using System.Collections;
+using System;
 using UnityEngine;
 using UnityEngine.UI;
 using Game.Inventory;
 using Game.Core;
 using Game.Input;
 using Game.Player;
+using Game.Interaction;
+using Game.Minigames;
 
 namespace Game.UI
 {
@@ -14,6 +17,13 @@ namespace Game.UI
     /// </summary>
     public class InventoryGridUI : MonoBehaviour
     {
+        [Serializable]
+        private class DropPrefabEntry
+        {
+            public string itemId = string.Empty;
+            public GameObject pickupPrefab;
+        }
+
         [Header("Slot Icon Images (1-9)")]
         [SerializeField]
         [Tooltip("Assign icon Image components for Slot_1 through Slot_9.")]
@@ -101,6 +111,38 @@ namespace Game.UI
         [Tooltip("Far-away world origin used to isolate preview rendering from gameplay scene geometry.")]
         private Vector3 _previewWorldOrigin = new Vector3(10000f, 10000f, 10000f);
 
+        [Header("Drop Selected Valuable (MVP)")]
+        [SerializeField]
+        private KeyCode _dropSelectedItemKey = KeyCode.G;
+
+        [SerializeField]
+        [Min(0.05f)]
+        private float _dropCooldownSeconds = 0.12f;
+
+        [SerializeField]
+        [Min(0.1f)]
+        private float _dropForwardDistance = 1.1f;
+
+        [SerializeField]
+        [Min(0f)]
+        private float _dropUpwardOffset = 0.15f;
+
+        [SerializeField]
+        [Min(0.5f)]
+        private float _dropRaycastDistance = 3f;
+
+        [SerializeField]
+        [Min(0f)]
+        private float _dropSurfaceNormalOffset = 0.05f;
+
+        [SerializeField]
+        [Tooltip("Tracked valuable itemId to world pickup prefab mappings used by drop.")]
+        private DropPrefabEntry[] _trackedValuableDropPrefabs =
+        {
+            new DropPrefabEntry { itemId = "wedding_ring_gold" },
+            new DropPrefabEntry { itemId = "wedding_ring_silver" }
+        };
+
         private const int VisibleSlotCount = 9;
         private const string PreviewCameraName = "InventoryPreviewCamera";
         private const string PreviewRootName = "InventoryPreviewRoot";
@@ -117,6 +159,7 @@ namespace Game.UI
         private Camera _previewCamera;
         private Transform _previewRoot;
         private bool _wasMinigameActiveLastFrame;
+        private float _nextAllowedDropTime;
         private bool _hasLoggedMissingHeldItemAnchor;
         private static bool _hasLoggedMissingHeldItemAnchorSession;
         private string _lastHeldItemAnchorBindFailureReason = string.Empty;
@@ -260,6 +303,11 @@ namespace Game.UI
             if (_wasMinigameActiveLastFrame && !isMinigameActive)
             {
                 RefreshAllSlots();
+            }
+
+            if (!isMinigameActive)
+            {
+                TryHandleDropInput();
             }
 
             _wasMinigameActiveLastFrame = isMinigameActive;
@@ -619,6 +667,257 @@ namespace Game.UI
             return slot != null ? slot.GetItem() : null;
         }
 
+        private void TryHandleDropInput()
+        {
+            if (!UnityEngine.Input.GetKeyDown(_dropSelectedItemKey))
+            {
+                return;
+            }
+
+            if (Time.time < _nextAllowedDropTime)
+            {
+                return;
+            }
+
+            if (!TryDropSelectedTrackedValuable())
+            {
+                return;
+            }
+
+            _nextAllowedDropTime = Time.time + Mathf.Max(0.05f, _dropCooldownSeconds);
+        }
+
+        private bool TryDropSelectedTrackedValuable()
+        {
+            if (!CanDropInCurrentState())
+            {
+                return false;
+            }
+
+            InventorySystem inventorySystem = InventorySystem.Instance;
+            GameManager gameManager = GameManager.Instance;
+            if (inventorySystem == null || gameManager == null)
+            {
+                return false;
+            }
+
+            if (!TryResolveSelectedSlotGridCoordinates(out int gridX, out int gridY))
+            {
+                return false;
+            }
+
+            InventorySlot selectedSlot = inventorySystem.GetSlot(gridX, gridY);
+            InventoryItem selectedItem = selectedSlot != null ? selectedSlot.GetItem() : null;
+            if (selectedItem == null || !selectedItem.IsValid())
+            {
+                return false;
+            }
+
+            if (!gameManager.IsTrackedStolenLootItem(selectedItem.ItemId))
+            {
+                return false;
+            }
+
+            if (!TryResolveDropPrefab(selectedItem.ItemId, out GameObject dropPrefab))
+            {
+                Debug.LogWarning($"[InventoryGridUI] No drop prefab mapping found for tracked valuable '{selectedItem.ItemId}'.", this);
+                return false;
+            }
+
+            if (!TryComputeDropSpawnPose(out Vector3 spawnPosition, out Quaternion spawnRotation))
+            {
+                return false;
+            }
+
+            InventoryItem removedItem = inventorySystem.RemoveItemAt(gridX, gridY);
+            if (removedItem == null)
+            {
+                return false;
+            }
+
+            GameObject spawned = Instantiate(dropPrefab, spawnPosition, spawnRotation);
+            if (spawned == null)
+            {
+                bool restored = RestoreRemovedItemAfterDropFailure(inventorySystem, removedItem, gridX, gridY);
+                Debug.LogWarning(
+                    $"[InventoryGridUI] Failed to instantiate dropped item prefab for '{removedItem.ItemId}'. " +
+                    (restored ? "Restored item to inventory." : "Rollback failed; item may be lost."),
+                    this);
+                return false;
+            }
+
+            InteractableItem droppedInteractable = spawned.GetComponent<InteractableItem>();
+            if (droppedInteractable == null)
+            {
+                Destroy(spawned);
+                bool restored = RestoreRemovedItemAfterDropFailure(inventorySystem, removedItem, gridX, gridY);
+                Debug.LogWarning(
+                    $"[InventoryGridUI] Dropped prefab for '{removedItem.ItemId}' is missing InteractableItem on root. " +
+                    (restored ? "Restored item to inventory." : "Rollback failed; item may be lost."),
+                    this);
+                return false;
+            }
+
+            droppedInteractable.DisablePersistenceForRuntimeDrop();
+            gameManager.TryUnregisterStolenLootForDrop(removedItem.ItemId, 1);
+            RefreshAllSlots();
+            return true;
+        }
+
+        private bool TryResolveSelectedSlotGridCoordinates(out int x, out int y)
+        {
+            x = 0;
+            y = 0;
+
+            InventorySystem inventorySystem = InventorySystem.Instance;
+            if (inventorySystem == null)
+            {
+                return false;
+            }
+
+            int unlockedQuickSlots = GetUnlockedQuickSlotCount();
+            int clampedIndex = Mathf.Clamp(_selectedSlotIndex, 0, Mathf.Max(0, unlockedQuickSlots - 1));
+
+            (int width, int height) = inventorySystem.GetGridDimensions();
+            x = clampedIndex % width;
+            y = clampedIndex / width;
+
+            return y < height;
+        }
+
+        private bool TryResolveDropPrefab(string itemId, out GameObject pickupPrefab)
+        {
+            pickupPrefab = null;
+            if (string.IsNullOrWhiteSpace(itemId) || _trackedValuableDropPrefabs == null)
+            {
+                return false;
+            }
+
+            string normalizedItemId = itemId.Trim();
+            for (int i = 0; i < _trackedValuableDropPrefabs.Length; i++)
+            {
+                DropPrefabEntry entry = _trackedValuableDropPrefabs[i];
+                if (entry == null || entry.pickupPrefab == null || string.IsNullOrWhiteSpace(entry.itemId))
+                {
+                    continue;
+                }
+
+                if (!string.Equals(entry.itemId.Trim(), normalizedItemId, StringComparison.Ordinal))
+                {
+                    continue;
+                }
+
+                pickupPrefab = entry.pickupPrefab;
+                return true;
+            }
+
+            return false;
+        }
+
+        private bool TryComputeDropSpawnPose(out Vector3 position, out Quaternion rotation)
+        {
+            Transform cameraTransform = null;
+            if (_heldItemAnchor != null && _heldItemAnchor.parent != null)
+            {
+                cameraTransform = _heldItemAnchor.parent;
+            }
+
+            if (cameraTransform == null)
+            {
+                FirstPersonCamera firstPersonCamera = FindAnyObjectByType<FirstPersonCamera>();
+                if (firstPersonCamera != null)
+                {
+                    cameraTransform = firstPersonCamera.transform;
+                }
+            }
+
+            if (cameraTransform == null)
+            {
+                position = transform.position + transform.forward;
+                rotation = Quaternion.Euler(0f, transform.eulerAngles.y, 0f);
+                return true;
+            }
+
+            Vector3 forward = cameraTransform.forward;
+            if (forward.sqrMagnitude <= 0.0001f)
+            {
+                forward = transform.forward;
+            }
+
+            forward.y = 0f;
+            if (forward.sqrMagnitude <= 0.0001f)
+            {
+                forward = transform.forward;
+                forward.y = 0f;
+            }
+
+            forward = forward.sqrMagnitude > 0.0001f ? forward.normalized : Vector3.forward;
+            Vector3 candidate = cameraTransform.position
+                + (forward * Mathf.Max(0.1f, _dropForwardDistance))
+                + (Vector3.up * Mathf.Max(0f, _dropUpwardOffset));
+
+            Vector3 rayOrigin = candidate + Vector3.up;
+            if (Physics.Raycast(rayOrigin, Vector3.down, out RaycastHit hit, Mathf.Max(0.5f, _dropRaycastDistance), ~0, QueryTriggerInteraction.Ignore))
+            {
+                position = hit.point + (hit.normal * Mathf.Max(0f, _dropSurfaceNormalOffset));
+            }
+            else
+            {
+                position = candidate;
+            }
+
+            rotation = Quaternion.Euler(0f, cameraTransform.eulerAngles.y, 0f);
+            return true;
+        }
+
+        private bool CanDropInCurrentState()
+        {
+            if (IsMinigameActive())
+            {
+                return false;
+            }
+
+            PauseManager pauseManager = PauseManager.Instance;
+            if (pauseManager != null && pauseManager.IsPaused)
+            {
+                return false;
+            }
+
+            MinigameManager minigameManager = MinigameManager.Instance;
+            if (minigameManager != null && minigameManager.IsMinigameActive())
+            {
+                return false;
+            }
+
+            GameManager gameManager = GameManager.Instance;
+            if (gameManager == null)
+            {
+                return false;
+            }
+
+            return gameManager.CurrentState == GameState.FreePlay
+                && gameManager.GetCurrentRunPhase() == GameManager.RunPhase.Work;
+        }
+
+        private static bool RestoreRemovedItemAfterDropFailure(
+            InventorySystem inventorySystem,
+            InventoryItem removedItem,
+            int gridX,
+            int gridY)
+        {
+            if (inventorySystem == null || removedItem == null)
+            {
+                return false;
+            }
+
+            if (inventorySystem.AddItemAt(removedItem, gridX, gridY))
+            {
+                return true;
+            }
+
+            return inventorySystem.AddItem(removedItem);
+        }
+
         private static bool IsMinigameActive()
         {
             GameManager gameManager = GameManager.Instance;
@@ -690,7 +989,7 @@ namespace Game.UI
                 return true;
             }
 
-            FirstPersonCamera firstPersonCamera = Object.FindAnyObjectByType<FirstPersonCamera>();
+            FirstPersonCamera firstPersonCamera = UnityEngine.Object.FindAnyObjectByType<FirstPersonCamera>();
             if (firstPersonCamera == null)
             {
                 _lastHeldItemAnchorBindFailureReason = "No active FirstPersonCamera component was found.";

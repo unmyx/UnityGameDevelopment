@@ -144,6 +144,10 @@ namespace Game.Systems
 
         private const int RoamTargetAttempts = 12;
         private const float FreezeProbeDistanceTolerance = 0.05f;
+        private const float MinRoamSampleDistance = 0.5f;
+        private const float MaxRoamSampleDistance = 1.25f;
+        private const float DestinationRefreshThreshold = 0.1f;
+        private const float AgentNavPositionSampleRadius = 0.6f;
 
         private void Reset()
         {
@@ -293,7 +297,11 @@ namespace Game.Systems
                 return;
             }
 
-            SetAgentDestination(_roamTarget, "Roaming");
+            if (ShouldRefreshRoamDestination())
+            {
+                SetAgentDestination(_roamTarget, "Roaming");
+            }
+
             bool reached = HasReachedDestination();
             if (reached)
             {
@@ -1137,7 +1145,16 @@ namespace Game.Systems
                 return;
             }
 
-            Vector3 selected = transform.position;
+            int areaMask = _agent != null ? _agent.areaMask : NavMesh.AllAreas;
+            float sampleDistance = Mathf.Clamp(roamRadius * 0.2f, MinRoamSampleDistance, MaxRoamSampleDistance);
+
+            if (!TryGetAgentNavPosition(areaMask, out Vector3 agentNavPosition))
+            {
+                _hasRoamTarget = false;
+                return;
+            }
+
+            Vector3 selected = agentNavPosition;
             bool found = false;
             NavMeshPath candidatePath = new NavMeshPath();
 
@@ -1145,12 +1162,12 @@ namespace Game.Systems
             {
                 Vector2 randomOffset = Random.insideUnitCircle * roamRadius;
                 Vector3 candidate = _spawnPosition + new Vector3(randomOffset.x, 0f, randomOffset.y);
-                if (NavMesh.SamplePosition(candidate, out NavMeshHit navHit, roamRadius * 0.5f, NavMesh.AllAreas))
+                if (NavMesh.SamplePosition(candidate, out NavMeshHit navHit, sampleDistance, areaMask))
                 {
-                    float distanceFromCurrent = Vector3.Distance(transform.position, navHit.position);
+                    float distanceFromCurrent = Vector3.Distance(agentNavPosition, navHit.position);
                     if (distanceFromCurrent >= roamMinTargetDistance)
                     {
-                        bool hasPath = NavMesh.CalculatePath(transform.position, navHit.position, NavMesh.AllAreas, candidatePath);
+                        bool hasPath = NavMesh.CalculatePath(agentNavPosition, navHit.position, areaMask, candidatePath);
                         if (hasPath && candidatePath.status == NavMeshPathStatus.PathComplete)
                         {
                             selected = navHit.position;
@@ -1165,9 +1182,26 @@ namespace Game.Systems
 
             if (!found)
             {
-                if (NavMesh.SamplePosition(_spawnPosition, out NavMeshHit spawnHit, roamRadius, NavMesh.AllAreas))
+                if (NavMesh.SamplePosition(agentNavPosition, out NavMeshHit nearbyHit, sampleDistance, areaMask))
                 {
-                    bool hasPath = NavMesh.CalculatePath(transform.position, spawnHit.position, NavMesh.AllAreas, candidatePath);
+                    bool hasPath = NavMesh.CalculatePath(agentNavPosition, nearbyHit.position, areaMask, candidatePath);
+                    if (hasPath && candidatePath.status == NavMeshPathStatus.PathComplete)
+                    {
+                        selected = nearbyHit.position;
+                        found = true;
+                    }
+                    else
+                    {
+                        Log($"Rejected nearby fallback roam candidate due to invalid path. Position: {nearbyHit.position}, status: {candidatePath.status}");
+                    }
+                }
+            }
+
+            if (!found)
+            {
+                if (NavMesh.SamplePosition(_spawnPosition, out NavMeshHit spawnHit, roamRadius, areaMask))
+                {
+                    bool hasPath = NavMesh.CalculatePath(agentNavPosition, spawnHit.position, areaMask, candidatePath);
                     if (hasPath && candidatePath.status == NavMeshPathStatus.PathComplete)
                     {
                         selected = spawnHit.position;
@@ -1175,7 +1209,7 @@ namespace Game.Systems
                     }
                     else
                     {
-                        Log($"Rejected fallback roam candidate due to invalid path. Position: {spawnHit.position}, status: {candidatePath.status}");
+                        Log($"Rejected spawn fallback roam candidate due to invalid path. Position: {spawnHit.position}, status: {candidatePath.status}");
                     }
                 }
             }
@@ -1274,6 +1308,11 @@ namespace Game.Systems
                 return false;
             }
 
+            if (_agent.pathStatus == NavMeshPathStatus.PathInvalid || _agent.pathStatus == NavMeshPathStatus.PathPartial)
+            {
+                return false;
+            }
+
             bool reached = _agent.remainingDistance <= stoppingDistance;
             if (reached)
             {
@@ -1338,6 +1377,55 @@ namespace Game.Systems
             }
 
             Debug.Log($"[NPCController] {message}");
+        }
+
+        private bool ShouldRefreshRoamDestination()
+        {
+            if (_agent == null)
+            {
+                return false;
+            }
+
+            if (_agent.pathPending)
+            {
+                return false;
+            }
+
+            if (!_agent.hasPath)
+            {
+                return true;
+            }
+
+            if (_agent.pathStatus != NavMeshPathStatus.PathComplete)
+            {
+                return true;
+            }
+
+            return Vector3.Distance(_agent.destination, _roamTarget) > DestinationRefreshThreshold;
+        }
+
+        private bool TryGetAgentNavPosition(int areaMask, out Vector3 navPosition)
+        {
+            navPosition = transform.position;
+
+            if (_agent == null || !_agent.isOnNavMesh)
+            {
+                return false;
+            }
+
+            if (NavMesh.SamplePosition(_agent.nextPosition, out NavMeshHit agentHit, AgentNavPositionSampleRadius, areaMask))
+            {
+                navPosition = agentHit.position;
+                return true;
+            }
+
+            if (NavMesh.SamplePosition(transform.position, out NavMeshHit transformHit, AgentNavPositionSampleRadius, areaMask))
+            {
+                navPosition = transformHit.position;
+                return true;
+            }
+
+            return false;
         }
 
         private void OnDrawGizmos()

@@ -1,6 +1,7 @@
-﻿using UnityEngine;
+using UnityEngine;
 using System;
 using System.Collections.Generic;
+using Game.Core;
 
 namespace Game.Inventory
 {
@@ -123,6 +124,12 @@ namespace Game.Inventory
             }
 
             if (!item.IsValid())
+            {
+                return false;
+            }
+
+            GameManager gameManager = GameManager.Instance;
+            if (gameManager != null && IsTrackedValuableAtCapacity(item, gameManager))
             {
                 return false;
             }
@@ -333,6 +340,51 @@ namespace Game.Inventory
             return gridX >= 0 && gridX < GRID_WIDTH && gridY >= 0 && gridY < GRID_HEIGHT;
         }
 
+        private bool IsTrackedValuableAtCapacity(InventoryItem item, GameManager gameManager)
+        {
+            if (item == null || gameManager == null || !gameManager.IsTrackedStolenLootItem(item.ItemId))
+            {
+                return false;
+            }
+
+            int unlockedQuickSlots = Mathf.Max(0, gameManager.GetUnlockedQuickSlots());
+            int trackedValuablesHeld = CountTrackedValuablesInInventory(gameManager);
+            if (trackedValuablesHeld < unlockedQuickSlots)
+            {
+                return false;
+            }
+
+            Debug.Log(
+                $"[InventorySystem] Blocked tracked valuable pickup '{item.ItemId}' - at capacity ({trackedValuablesHeld}/{unlockedQuickSlots}).",
+                this);
+            return true;
+        }
+
+        private int CountTrackedValuablesInInventory(GameManager gameManager)
+        {
+            if (gameManager == null || _allItems == null || _allItems.Count == 0)
+            {
+                return 0;
+            }
+
+            int count = 0;
+            for (int i = 0; i < _allItems.Count; i++)
+            {
+                InventoryItem heldItem = _allItems[i];
+                if (heldItem == null || !heldItem.IsValid())
+                {
+                    continue;
+                }
+
+                if (gameManager.IsTrackedStolenLootItem(heldItem.ItemId))
+                {
+                    count++;
+                }
+            }
+
+            return count;
+        }
+
         public void ClearInventory()
         {
             EnsureInitialized();
@@ -495,3 +547,4 @@ namespace Game.Inventory
         }
     }
 }
+

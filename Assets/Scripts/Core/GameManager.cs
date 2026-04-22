@@ -800,6 +800,17 @@ namespace Game.Core
             return Mathf.Clamp(3 + Mathf.Max(0, tier), 3, 9);
         }
 
+        public bool IsTrackedStolenLootItem(string itemId)
+        {
+            string normalizedItemId = NormalizeStolenLootItemId(itemId);
+            if (string.IsNullOrEmpty(normalizedItemId))
+            {
+                return false;
+            }
+
+            return GetStolenLootSellPrice(normalizedItemId) > 0;
+        }
+
         public float GetCleaningEffectivenessMultiplier()
         {
             int tier = GetOwnedUpgradeTier(UpgradeIdCleaningTool);
@@ -1379,6 +1390,47 @@ namespace Game.Core
             }
 
             return 0;
+        }
+
+        public bool TryUnregisterStolenLootForDrop(string itemId, int amount = 1)
+        {
+            string normalizedItemId = NormalizeStolenLootItemId(itemId);
+            if (string.IsNullOrEmpty(normalizedItemId) || amount <= 0)
+            {
+                return false;
+            }
+
+            int remainingToRemove = amount;
+            for (int i = _stolenLootThisDay.Count - 1; i >= 0; i--)
+            {
+                StolenLootTrackerEntry entry = _stolenLootThisDay[i];
+                if (entry == null || !string.Equals(entry.itemId, normalizedItemId, StringComparison.Ordinal))
+                {
+                    continue;
+                }
+
+                int currentCount = Mathf.Max(0, entry.count);
+                int removed = Mathf.Min(currentCount, remainingToRemove);
+                if (removed <= 0)
+                {
+                    continue;
+                }
+
+                entry.count = currentCount - removed;
+                remainingToRemove -= removed;
+
+                if (entry.count <= 0)
+                {
+                    _stolenLootThisDay.RemoveAt(i);
+                }
+
+                if (remainingToRemove <= 0)
+                {
+                    break;
+                }
+            }
+
+            return remainingToRemove < amount;
         }
 
         public List<StolenLootEntryData> GetStolenLootThisDaySnapshot()
@@ -3106,3 +3158,4 @@ namespace Game.Core
         }
     }
 }
+

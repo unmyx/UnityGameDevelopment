@@ -8275,6 +8275,14 @@ PrefabInstance:
       propertyPath: _heldItemAnchor
       value: 
       objectReference: {fileID: 3233005856554548433}
+    - target: {fileID: 7723667456100475430, guid: 389efe909d084674d94131ddf5ead724, type: 3}
+      propertyPath: _trackedValuableDropPrefabs.Array.data[0].pickupPrefab
+      value: 
+      objectReference: {fileID: 7905953786737193585, guid: 5e4f4c92c881d8c4ab64e1aecb648edb, type: 3}
+    - target: {fileID: 7723667456100475430, guid: 389efe909d084674d94131ddf5ead724, type: 3}
+      propertyPath: _trackedValuableDropPrefabs.Array.data[1].pickupPrefab
+      value: 
+      objectReference: {fileID: 4596119888003858957, guid: b000145df1cb27a49b69cfc3ceb3c4cc, type: 3}
     m_RemovedComponents: []
     m_RemovedGameObjects: []
     m_AddedGameObjects: []
