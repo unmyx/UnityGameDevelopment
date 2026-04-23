@@ -42,6 +42,7 @@ namespace Game.Minigames
 
     public class MinigameData
     {
+        public string ownerPlayerId = "local_player_0";
         public string minigameId = "minigame_default";
         public string displayName = "Minigame";
         public float timeLimit = 0f;

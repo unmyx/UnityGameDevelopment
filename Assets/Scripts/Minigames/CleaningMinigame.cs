@@ -93,6 +93,7 @@ namespace Game.Minigames
         private MinigameResult _pendingResult = MinigameResult.None;
         private bool _hasMousePosition;
         private Vector2 _previousMousePosition;
+        private bool _usesPresentationCursorAuthority;
 
         private PlayerController _playerController;
         private bool _playerControllerWasEnabled;
@@ -1225,7 +1226,33 @@ namespace Game.Minigames
                 return _gameplayViewCamera;
             }
 
-            FirstPersonCamera firstPersonCamera = FindAnyObjectByType<FirstPersonCamera>();
+            if (PlayerContextLocator.TryGetLocalFirstPersonCamera(out FirstPersonCamera localFirstPersonCamera)
+                && localFirstPersonCamera != null)
+            {
+                _gameplayViewCamera = localFirstPersonCamera.GetComponent<Camera>();
+                if (_gameplayViewCamera != null)
+                {
+                    return _gameplayViewCamera;
+                }
+            }
+
+            FirstPersonCamera firstPersonCamera = null;
+            if (PlayerContextLocator.IsCompatibilityFallbackAllowed()
+                && PlayerContextLocator.TryGetFirstPersonCamera(out firstPersonCamera)
+                && firstPersonCamera != null)
+            {
+                _gameplayViewCamera = firstPersonCamera.GetComponent<Camera>();
+                if (_gameplayViewCamera != null)
+                {
+                    return _gameplayViewCamera;
+                }
+            }
+
+            if (PlayerContextLocator.IsCompatibilityFallbackAllowed())
+            {
+                firstPersonCamera = FindAnyObjectByType<FirstPersonCamera>();
+            }
+
             if (firstPersonCamera != null)
             {
                 _gameplayViewCamera = firstPersonCamera.GetComponent<Camera>();
@@ -1235,7 +1262,12 @@ namespace Game.Minigames
                 }
             }
 
-            _gameplayViewCamera = Camera.main;
+            if (PlayerContextLocator.IsCompatibilityFallbackAllowed())
+            {
+                _gameplayViewCamera = Camera.main;
+            }
+
+            // TODO(MP-6): Remove compatibility camera fallbacks once per-player concurrent minigame presentation is supported.
             return _gameplayViewCamera;
         }
 
@@ -1284,6 +1316,12 @@ namespace Game.Minigames
             if (gameplayCamera == null || gameplayCamera == _worldViewCamera)
             {
                 return;
+            }
+
+            if (PlayerContextLocator.TryGetLocalPresentationState(out LocalPlayerPresentationState presentationState)
+                && presentationState != null)
+            {
+                presentationState.SetGameplayCameraSuppressed(suppressed);
             }
 
             if (suppressed)
@@ -1575,6 +1613,13 @@ namespace Game.Minigames
 
         private void LockCursor()
         {
+            if (PlayerContextLocator.TryAcquireLocalCursorAuthority("minigame_cleaning", CursorLockMode.None, true))
+            {
+                _usesPresentationCursorAuthority = true;
+                return;
+            }
+
+            _usesPresentationCursorAuthority = false;
             _previousCursorLockMode = Cursor.lockState;
             _previousCursorVisible = Cursor.visible;
 
@@ -1584,6 +1629,13 @@ namespace Game.Minigames
 
         private void UnlockCursor()
         {
+            if (_usesPresentationCursorAuthority)
+            {
+                PlayerContextLocator.TryReleaseLocalCursorAuthority("minigame_cleaning");
+                _usesPresentationCursorAuthority = false;
+                return;
+            }
+
             Cursor.lockState = _previousCursorLockMode;
             Cursor.visible = _previousCursorVisible;
         }

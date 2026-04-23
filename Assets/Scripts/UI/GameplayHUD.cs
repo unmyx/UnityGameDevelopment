@@ -4,6 +4,7 @@ using Game.Core;
 using Game.Core.Events;
 using Game.Interaction;
 using Game.Minigames;
+using Game.Player;
 using TMPro;
 
 namespace Game.UI
@@ -14,6 +15,7 @@ namespace Game.UI
     /// </summary>
     public class GameplayHUD : MonoBehaviour
     {
+        private const string LocalPlayerId = PlayerContextRegistry.DefaultLocalPlayerId;
         [Header("Currency Display")]
         [SerializeField]
         [Tooltip("Text component showing currency amount")]
@@ -161,6 +163,7 @@ namespace Game.UI
             }
 
             ValidatePromptReferences();
+            TryResolveInteractionSystemFromLocalContext();
 
             if (_currencyIcon != null)
             {
@@ -170,6 +173,7 @@ namespace Game.UI
 
         private void OnEnable()
         {
+            RegisterLocalContext();
             EventBus.Subscribe<CurrencyChangedEvent>(OnCurrencyChanged);
             EventBus.Subscribe<DayWorkEarningsChangedEvent>(OnDayWorkEarningsChanged);
             EventBus.Subscribe<ObjectiveProgressEvent>(OnObjectiveProgress);
@@ -192,6 +196,7 @@ namespace Game.UI
 
         private void OnDisable()
         {
+            PlayerContextRegistry.Unregister(this, LocalPlayerId);
             EventBus.Unsubscribe<CurrencyChangedEvent>(OnCurrencyChanged);
             EventBus.Unsubscribe<DayWorkEarningsChangedEvent>(OnDayWorkEarningsChanged);
             EventBus.Unsubscribe<ObjectiveProgressEvent>(OnObjectiveProgress);
@@ -215,6 +220,7 @@ namespace Game.UI
             UpdateRunPhaseDisplay();
             UpdateObjectivesDisplay();
             TickFeedbackDisplay();
+            TryResolveInteractionSystemFromLocalContext();
         }
 
         private void UpdateVisibility()
@@ -279,6 +285,12 @@ namespace Game.UI
 
         private bool IsMinigamePresentationActive()
         {
+            if (PlayerContextLocator.TryGetLocalPresentationMode(out LocalPlayerPresentationMode mode)
+                && mode == LocalPlayerPresentationMode.Minigame)
+            {
+                return true;
+            }
+
             GameManager gameManager = GameManager.Instance;
             if (gameManager != null && gameManager.CurrentState == GameState.Minigame)
             {
@@ -286,7 +298,7 @@ namespace Game.UI
             }
 
             MinigameManager minigameManager = MinigameManager.Instance;
-            if (minigameManager != null && minigameManager.IsMinigameActive())
+            if (minigameManager != null && minigameManager.IsMinigameActiveForOwner(LocalPlayerId))
             {
                 return true;
             }
@@ -658,6 +670,8 @@ namespace Game.UI
 
         private void UpdateInteractionPromptVisibility(bool canShowGameplayCenterUi)
         {
+            TryResolveInteractionSystemFromLocalContext();
+
             if (_interactionPromptText == null)
             {
                 return;
@@ -669,6 +683,33 @@ namespace Game.UI
                 && _interactionSystem.CanInteractWithCurrent();
 
             _interactionPromptText.gameObject.SetActive(shouldShowPrompt);
+        }
+
+        private void TryResolveInteractionSystemFromLocalContext()
+        {
+            if (_interactionSystem != null)
+            {
+                return;
+            }
+
+            if (PlayerContextLocator.TryGetLocalInteractionSystem(out InteractionSystem localInteractionSystem)
+                && localInteractionSystem != null)
+            {
+                _interactionSystem = localInteractionSystem;
+                return;
+            }
+
+            if (PlayerContextLocator.IsCompatibilityFallbackAllowed()
+                && PlayerContextLocator.TryGetInteractionSystem(out InteractionSystem fallbackInteractionSystem)
+                && fallbackInteractionSystem != null)
+            {
+                _interactionSystem = fallbackInteractionSystem;
+            }
+        }
+
+        private void RegisterLocalContext()
+        {
+            PlayerContextRegistry.RegisterOrUpdate(this, LocalPlayerId);
         }
 
         private void ConfigureCrosshairText(TextMeshProUGUI crosshairText)

@@ -2,6 +2,7 @@ using UnityEngine;
 using System;
 using System.Collections.Generic;
 using Game.Core;
+using Game.Player;
 
 namespace Game.Inventory
 {
@@ -116,7 +117,13 @@ namespace Game.Inventory
 
         public bool AddItem(InventoryItem item)
         {
+            return AddItem(item, PlayerInventoryAuthority.GetLocalOwnerPlayerId());
+        }
+
+        public bool AddItem(InventoryItem item, string ownerPlayerId)
+        {
             EnsureInitialized();
+            PlayerInventoryAuthority.LogNonLocalOwnerUsage("InventorySystem.AddItem", ownerPlayerId, this);
 
             if (item == null)
             {
@@ -149,7 +156,13 @@ namespace Game.Inventory
 
         public bool AddItemAt(InventoryItem item, int gridX, int gridY)
         {
+            return AddItemAt(item, gridX, gridY, PlayerInventoryAuthority.GetLocalOwnerPlayerId());
+        }
+
+        public bool AddItemAt(InventoryItem item, int gridX, int gridY, string ownerPlayerId)
+        {
             EnsureInitialized();
+            PlayerInventoryAuthority.LogNonLocalOwnerUsage("InventorySystem.AddItemAt", ownerPlayerId, this);
 
             if (item == null)
             {
@@ -206,7 +219,13 @@ namespace Game.Inventory
 
         public InventoryItem RemoveItemAt(int gridX, int gridY)
         {
+            return RemoveItemAt(gridX, gridY, PlayerInventoryAuthority.GetLocalOwnerPlayerId());
+        }
+
+        public InventoryItem RemoveItemAt(int gridX, int gridY, string ownerPlayerId)
+        {
             EnsureInitialized();
+            PlayerInventoryAuthority.LogNonLocalOwnerUsage("InventorySystem.RemoveItemAt", ownerPlayerId, this);
 
             if (!IsValidPosition(gridX, gridY))
             {
@@ -227,7 +246,13 @@ namespace Game.Inventory
 
         public int RemoveItemsByItemId(string itemId, int maxCount)
         {
+            return RemoveItemsByItemId(itemId, maxCount, PlayerInventoryAuthority.GetLocalOwnerPlayerId());
+        }
+
+        public int RemoveItemsByItemId(string itemId, int maxCount, string ownerPlayerId)
+        {
             EnsureInitialized();
+            PlayerInventoryAuthority.LogNonLocalOwnerUsage("InventorySystem.RemoveItemsByItemId", ownerPlayerId, this);
 
             if (string.IsNullOrWhiteSpace(itemId) || maxCount <= 0)
             {

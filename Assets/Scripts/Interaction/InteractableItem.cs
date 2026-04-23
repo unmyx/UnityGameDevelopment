@@ -2,6 +2,7 @@
 using Game.Inventory;
 using Game.Core;
 using Game.Core.Events;
+using Game.Player;
 
 namespace Game.Interaction
 {
@@ -166,7 +167,8 @@ namespace Game.Interaction
                 InventorySystem inventorySystem = InventorySystem.Instance;
                 if (inventorySystem != null)
                 {
-                    bool success = inventorySystem.AddItem(_inventoryItem);
+                    string ownerPlayerId = PlayerInventoryAuthority.GetLocalOwnerPlayerId();
+                    bool success = inventorySystem.AddItem(_inventoryItem, ownerPlayerId);
                     if (success)
                     {
                         // Fire event for UI/game feedback
@@ -262,7 +264,8 @@ namespace Game.Interaction
                 return;
             }
 
-            if (gameManager.TryRegisterStolenLootPickup(_inventoryItem.ItemId))
+            string ownerPlayerId = PlayerInventoryAuthority.GetLocalOwnerPlayerId();
+            if (gameManager.TryRegisterStolenLootPickup(_inventoryItem.ItemId, ownerPlayerId))
             {
                 _stolenLootRegistered = true;
             }

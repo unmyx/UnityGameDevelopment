@@ -93,6 +93,7 @@ namespace Game.Minigames
         private bool _hasProcessedTimeoutFailure;
         private bool _isSetupValid = true;
         private string _setupFailureReason = string.Empty;
+        private bool _usesPresentationCursorAuthority;
 
         private bool _isFinishing;
         private bool _isReturningToGameplayView;
@@ -190,10 +191,7 @@ namespace Game.Minigames
 
             if (_unlockCursorDuringMinigame)
             {
-                _previousCursorLockMode = Cursor.lockState;
-                _previousCursorVisible = Cursor.visible;
-                Cursor.lockState = CursorLockMode.None;
-                Cursor.visible = true;
+                AcquireMinigameCursorAuthority();
             }
 
             _inputHandler.CachePaintAction();
@@ -258,8 +256,7 @@ namespace Game.Minigames
 
             if (_unlockCursorDuringMinigame)
             {
-                Cursor.lockState = _previousCursorLockMode;
-                Cursor.visible = _previousCursorVisible;
+                ReleaseMinigameCursorAuthority();
             }
 
             if (_timerText != null)
@@ -1084,7 +1081,22 @@ namespace Game.Minigames
                 return _gameplayViewCamera;
             }
 
-            if (_firstPersonCamera == null)
+            if (_firstPersonCamera == null
+                && PlayerContextLocator.TryGetLocalFirstPersonCamera(out FirstPersonCamera localFirstPersonCamera)
+                && localFirstPersonCamera != null)
+            {
+                _firstPersonCamera = localFirstPersonCamera;
+            }
+
+            if (_firstPersonCamera == null
+                && PlayerContextLocator.IsCompatibilityFallbackAllowed()
+                && PlayerContextLocator.TryGetFirstPersonCamera(out FirstPersonCamera compatibilityFirstPersonCamera)
+                && compatibilityFirstPersonCamera != null)
+            {
+                _firstPersonCamera = compatibilityFirstPersonCamera;
+            }
+
+            if (_firstPersonCamera == null && PlayerContextLocator.IsCompatibilityFallbackAllowed())
             {
                 _firstPersonCamera = FindAnyObjectByType<FirstPersonCamera>();
             }
@@ -1098,7 +1110,12 @@ namespace Game.Minigames
                 }
             }
 
-            _gameplayViewCamera = Camera.main;
+            if (PlayerContextLocator.IsCompatibilityFallbackAllowed())
+            {
+                _gameplayViewCamera = Camera.main;
+            }
+
+            // TODO(MP-6): Remove compatibility camera fallbacks once per-player concurrent minigame presentation is supported.
             return _gameplayViewCamera;
         }
 
@@ -1428,6 +1445,34 @@ namespace Game.Minigames
             timerRect.localScale = Vector3.one;
             timerRect.gameObject.SetActive(true);
             timerRect.SetAsLastSibling();
+        }
+
+        private void AcquireMinigameCursorAuthority()
+        {
+            if (PlayerContextLocator.TryAcquireLocalCursorAuthority("minigame_welding", CursorLockMode.None, true))
+            {
+                _usesPresentationCursorAuthority = true;
+                return;
+            }
+
+            _usesPresentationCursorAuthority = false;
+            _previousCursorLockMode = Cursor.lockState;
+            _previousCursorVisible = Cursor.visible;
+            Cursor.lockState = CursorLockMode.None;
+            Cursor.visible = true;
+        }
+
+        private void ReleaseMinigameCursorAuthority()
+        {
+            if (_usesPresentationCursorAuthority)
+            {
+                PlayerContextLocator.TryReleaseLocalCursorAuthority("minigame_welding");
+                _usesPresentationCursorAuthority = false;
+                return;
+            }
+
+            Cursor.lockState = _previousCursorLockMode;
+            Cursor.visible = _previousCursorVisible;
         }
 
         private void NormalizeCoverageTextRect(TMP_Text coverageText, Transform canvasTransform)

@@ -2,6 +2,7 @@ using UnityEngine;
 using System.Collections.Generic;
 using Game.Core;
 using Game.Core.Events;
+using Game.Player;
 using UnityEngine.SceneManagement;
 
 namespace Game.Minigames
@@ -17,6 +18,7 @@ namespace Game.Minigames
 
         private const string CleaningMinigameId = "cleaning";
         private const string WeldingMinigameId = "welding";
+        private const string FreeplayCursorAuthorityOwner = "freeplay_camera";
         private const string MissingCleaningCanvasErrorMessage =
             "[MinigameManager] Cannot start cleaning minigame: missing CleaningCanvas reference in the active scene.";
         private const string MissingWeldingCanvasErrorMessage =
@@ -31,6 +33,7 @@ namespace Game.Minigames
         private System.Type _minigameType;
         private int _sessionSequence;
         private int _activeSessionToken;
+        private string _activeOwnerPlayerId = PlayerContextRegistry.DefaultLocalPlayerId;
         private int _managerLifetimeScope;
         private int _lastTerminalFlowFrame = -1;
         private string _lastTerminalFlowType;
@@ -85,6 +88,12 @@ namespace Game.Minigames
 
         public IMinigame StartMinigame<T>(MinigameData data) where T : MonoBehaviour, IMinigame
         {
+            string ownerPlayerId = ResolveOwnerPlayerId(data != null ? data.ownerPlayerId : null);
+            return StartMinigame<T>(data, ownerPlayerId);
+        }
+
+        public IMinigame StartMinigame<T>(MinigameData data, string ownerPlayerId) where T : MonoBehaviour, IMinigame
+        {
             if (_activeMinigame != null && _activeMinigame.IsActive())
             {
                 return null;
@@ -94,6 +103,9 @@ namespace Game.Minigames
             {
                 return null;
             }
+
+            ownerPlayerId = ResolveOwnerPlayerId(ownerPlayerId);
+            data.ownerPlayerId = ownerPlayerId;
 
             if (!ValidateCanvasRequirements(typeof(T), data))
             {
@@ -115,8 +127,10 @@ namespace Game.Minigames
             _minigameGameObject = gameObject;
             _minigameType = typeof(T);
             _activeSessionToken = ++_sessionSequence;
+            _activeOwnerPlayerId = ownerPlayerId;
 
             _activeMinigame.Initialize(data);
+            BeginLocalPresentationForOwner(data.minigameId, _activeOwnerPlayerId);
             _activeMinigame.OnMinigameStart();
 
             MinigameResult startupResult = _activeMinigame.GetResult();
@@ -126,12 +140,18 @@ namespace Game.Minigames
                 return null;
             }
 
-            EventBus.Publish(new MinigameStartedEvent(data.minigameId));
+            EventBus.Publish(new MinigameStartedEvent(data.minigameId, _activeOwnerPlayerId));
 
             return _activeMinigame;
         }
 
         public IMinigame StartMinigameWithObject(IMinigame minigame, MinigameData data)
+        {
+            string ownerPlayerId = ResolveOwnerPlayerId(data != null ? data.ownerPlayerId : null);
+            return StartMinigameWithObject(minigame, data, ownerPlayerId);
+        }
+
+        public IMinigame StartMinigameWithObject(IMinigame minigame, MinigameData data, string ownerPlayerId)
         {
             if (minigame == null)
             {
@@ -148,6 +168,9 @@ namespace Game.Minigames
                 return null;
             }
 
+            ownerPlayerId = ResolveOwnerPlayerId(ownerPlayerId);
+            data.ownerPlayerId = ownerPlayerId;
+
             if (!ValidateCanvasRequirements(minigame.GetType(), data))
             {
                 return null;
@@ -158,8 +181,10 @@ namespace Game.Minigames
             _activeMinigame = minigame;
             _minigameGameObject = (minigame as MonoBehaviour)?.gameObject;
             _activeSessionToken = ++_sessionSequence;
+            _activeOwnerPlayerId = ownerPlayerId;
 
             _activeMinigame.Initialize(data);
+            BeginLocalPresentationForOwner(data.minigameId, _activeOwnerPlayerId);
             _activeMinigame.OnMinigameStart();
 
             MinigameResult startupResult = _activeMinigame.GetResult();
@@ -169,7 +194,7 @@ namespace Game.Minigames
                 return null;
             }
 
-            EventBus.Publish(new MinigameStartedEvent(data.minigameId));
+            EventBus.Publish(new MinigameStartedEvent(data.minigameId, _activeOwnerPlayerId));
 
             return _activeMinigame;
         }
@@ -184,6 +209,7 @@ namespace Game.Minigames
 
             MinigameResult result = _activeMinigame.GetResult();
             string minigameId = _activeMinigame.GetMinigameId();
+            string ownerPlayerId = _activeOwnerPlayerId;
 
             _activeMinigame.OnMinigameEnd();
 
@@ -192,7 +218,8 @@ namespace Game.Minigames
                 Destroy(_minigameGameObject);
             }
 
-            EventBus.Publish(new MinigameEndedEvent(result));
+            EventBus.Publish(new MinigameEndedEvent(result, minigameId, ownerPlayerId));
+            EndLocalPresentationForOwner(ownerPlayerId);
 
             if (ObjectiveManager.TryGetInstance(out ObjectiveManager objectiveManager))
             {
@@ -202,12 +229,13 @@ namespace Game.Minigames
             {
                 Debug.LogWarning("[MinigameManager] ObjectiveManager is missing; objective sync skipped after minigame end.");
             }
-            MinigameRewardSystem.DistributeRewards(result, minigameId, _activeSessionToken, _managerLifetimeScope);
+            MinigameRewardSystem.DistributeRewards(result, minigameId, ownerPlayerId, _activeSessionToken, _managerLifetimeScope);
 
             _activeMinigame = null;
             _minigameGameObject = null;
             _minigameType = null;
             _activeSessionToken = 0;
+            _activeOwnerPlayerId = PlayerContextRegistry.DefaultLocalPlayerId;
             _lastTerminalFlowFrame = Time.frameCount;
             _lastTerminalFlowType = "end";
 
@@ -223,18 +251,22 @@ namespace Game.Minigames
             }
 
             _activeMinigame.OnMinigameEnd();
+            string minigameId = _activeMinigame.GetMinigameId();
+            string ownerPlayerId = _activeOwnerPlayerId;
 
             if (_minigameGameObject != null)
             {
                 Destroy(_minigameGameObject);
             }
 
-            EventBus.Publish(new MinigameCancelledEvent(MinigameResult.Cancelled));
+            EventBus.Publish(new MinigameCancelledEvent(MinigameResult.Cancelled, minigameId, ownerPlayerId));
+            EndLocalPresentationForOwner(ownerPlayerId);
 
             _activeMinigame = null;
             _minigameGameObject = null;
             _minigameType = null;
             _activeSessionToken = 0;
+            _activeOwnerPlayerId = PlayerContextRegistry.DefaultLocalPlayerId;
             _lastTerminalFlowFrame = Time.frameCount;
             _lastTerminalFlowType = "cancel";
 
@@ -249,6 +281,29 @@ namespace Game.Minigames
         public bool IsMinigameActive()
         {
             return _activeMinigame != null && _activeMinigame.IsActive();
+        }
+
+        public bool IsMinigameActiveForOwner(string ownerPlayerId)
+        {
+            if (!IsMinigameActive())
+            {
+                return false;
+            }
+
+            string normalizedOwner = ResolveOwnerPlayerId(ownerPlayerId);
+            return string.Equals(normalizedOwner, _activeOwnerPlayerId, System.StringComparison.Ordinal);
+        }
+
+        public bool TryGetActiveOwnerPlayerId(out string ownerPlayerId)
+        {
+            if (IsMinigameActive())
+            {
+                ownerPlayerId = _activeOwnerPlayerId;
+                return true;
+            }
+
+            ownerPlayerId = string.Empty;
+            return false;
         }
 
         public MinigameResult GetLastResult()
@@ -343,6 +398,35 @@ namespace Game.Minigames
                     $"Previous={_lastTerminalFlowType}, Incoming={incomingFlowType}, Result={result}.",
                     this);
             }
+        }
+
+        private static string ResolveOwnerPlayerId(string ownerPlayerId)
+        {
+            return string.IsNullOrWhiteSpace(ownerPlayerId)
+                ? PlayerContextRegistry.DefaultLocalPlayerId
+                : ownerPlayerId.Trim();
+        }
+
+        private static void BeginLocalPresentationForOwner(string minigameId, string ownerPlayerId)
+        {
+            if (!PlayerInventoryAuthority.IsLocalOwner(ownerPlayerId))
+            {
+                return;
+            }
+
+            PlayerContextLocator.BeginLocalMinigamePresentation(minigameId, ownerPlayerId);
+            PlayerContextLocator.TryReleaseLocalCursorAuthority(FreeplayCursorAuthorityOwner);
+        }
+
+        private static void EndLocalPresentationForOwner(string ownerPlayerId)
+        {
+            if (!PlayerInventoryAuthority.IsLocalOwner(ownerPlayerId))
+            {
+                return;
+            }
+
+            PlayerContextLocator.EndLocalMinigamePresentation(ownerPlayerId);
+            PlayerContextLocator.TrySetLocalPresentationMode(LocalPlayerPresentationMode.FreePlay);
         }
     }
 }

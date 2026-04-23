@@ -2,6 +2,7 @@ using UnityEngine;
 using Game.Input;
 using Game.Inventory;
 using Game.Minigames;
+using Game.Player;
 
 namespace Game.Core
 {
@@ -11,6 +12,7 @@ namespace Game.Core
     /// </summary>
     public class PauseManager : MonoBehaviour
     {
+        private const string PauseCursorAuthorityOwner = "pause_menu";
         private const string MissingInstanceMessage =
             "[PauseManager] Instance requested but no PauseManager exists in the active scene. " +
             "Add PauseManager to your bootstrap/gameplay scene instead of relying on runtime auto-creation.";
@@ -146,7 +148,16 @@ namespace Game.Core
                 return;
 
             CaptureCursorStateForPause();
-            SetCursorForPauseMenu();
+            if (!PlayerContextLocator.TryAcquireLocalCursorAuthority(PauseCursorAuthorityOwner, CursorLockMode.None, true))
+            {
+                SetCursorForPauseMenu();
+            }
+            else
+            {
+                _hasCursorStateBeforePause = false;
+            }
+
+            PlayerContextLocator.TrySetLocalPresentationMode(LocalPlayerPresentationMode.Paused);
             _isPaused = true;
             Time.timeScale = 0f;
             OnPaused?.Invoke();
@@ -160,7 +171,25 @@ namespace Game.Core
 
             _isPaused = false;
             Time.timeScale = 1f;
-            RestoreCursorStateAfterPause();
+            if (!PlayerContextLocator.TryReleaseLocalCursorAuthority(PauseCursorAuthorityOwner))
+            {
+                RestoreCursorStateAfterPause();
+            }
+            else
+            {
+                _hasCursorStateBeforePause = false;
+            }
+
+            MinigameManager minigameManager = MinigameManager.Instance;
+            if (minigameManager != null && minigameManager.IsMinigameActiveForOwner(PlayerContextRegistry.DefaultLocalPlayerId))
+            {
+                PlayerContextLocator.TrySetLocalPresentationMode(LocalPlayerPresentationMode.Minigame);
+            }
+            else
+            {
+                PlayerContextLocator.TrySetLocalPresentationMode(LocalPlayerPresentationMode.FreePlay);
+            }
+
             OnResumed?.Invoke();
         }
 
@@ -188,7 +217,13 @@ namespace Game.Core
             }
 
             MinigameManager minigameManager = MinigameManager.Instance;
-            if (minigameManager != null && minigameManager.IsMinigameActive())
+            if (minigameManager != null && minigameManager.IsMinigameActiveForOwner(PlayerContextRegistry.DefaultLocalPlayerId))
+            {
+                return false;
+            }
+
+            if (PlayerContextLocator.TryGetLocalPresentationMode(out LocalPlayerPresentationMode mode)
+                && mode == LocalPlayerPresentationMode.Minigame)
             {
                 return false;
             }

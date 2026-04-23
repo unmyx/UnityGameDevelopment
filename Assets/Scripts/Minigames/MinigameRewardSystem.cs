@@ -27,14 +27,19 @@ namespace Game.Minigames
         /// </summary>
         public static void DistributeRewards(MinigameResult result, string minigameId, int sessionToken)
         {
-            DistributeRewards(result, minigameId, sessionToken, dedupeLifecycleScope: 0);
+            DistributeRewards(result, minigameId, "local_player_0", sessionToken, dedupeLifecycleScope: 0);
+        }
+
+        public static void DistributeRewards(MinigameResult result, string minigameId, string ownerPlayerId, int sessionToken)
+        {
+            DistributeRewards(result, minigameId, ownerPlayerId, sessionToken, dedupeLifecycleScope: 0);
         }
 
         /// <summary>
         /// Distribute rewards for a minigame completion. Rewards are pass-only and
         /// unique per manager lifecycle scope + session token.
         /// </summary>
-        public static void DistributeRewards(MinigameResult result, string minigameId, int sessionToken, int dedupeLifecycleScope)
+        public static void DistributeRewards(MinigameResult result, string minigameId, string ownerPlayerId, int sessionToken, int dedupeLifecycleScope)
         {
             if (result != MinigameResult.Pass)
             {
@@ -70,6 +75,7 @@ namespace Game.Minigames
             RewardGrantedData rewardEventData = new RewardGrantedData
             {
                 minigameId = minigameId,
+                ownerPlayerId = string.IsNullOrWhiteSpace(ownerPlayerId) ? "local_player_0" : ownerPlayerId.Trim(),
                 result = result,
                 currencyAwarded = rewardCurrency,
                 itemsAwarded = 0
@@ -114,6 +120,7 @@ namespace Game.Minigames
     public class RewardGrantedData
     {
         public string minigameId;
+        public string ownerPlayerId;
         public MinigameResult result;
         public int currencyAwarded;
         public int itemsAwarded;

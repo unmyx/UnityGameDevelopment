@@ -1,4 +1,5 @@
 using UnityEngine;
+using Game.Player;
 
 namespace Game.Core
 {
@@ -10,6 +11,7 @@ namespace Game.Core
     {
         public void OnStateEnter()
         {
+            PlayerContextLocator.TrySetLocalPresentationMode(LocalPlayerPresentationMode.Minigame);
         }
 
         public void OnStateUpdate()
@@ -18,6 +20,7 @@ namespace Game.Core
 
         public void OnStateExit()
         {
+            PlayerContextLocator.TrySetLocalPresentationMode(LocalPlayerPresentationMode.FreePlay);
         }
     }
 }

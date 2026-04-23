@@ -28,6 +28,9 @@ namespace Game.Player
     /// </summary>
     public class FirstPersonCamera : MonoBehaviour
     {
+        private const string LocalPlayerId = PlayerContextRegistry.DefaultLocalPlayerId;
+        private const string CursorAuthorityOwner = "freeplay_camera";
+
         [Header("Rotation Targets")]
         [SerializeField]
         [Tooltip("Transform that receives horizontal (yaw) rotation. If not assigned, it auto-resolves from hierarchy.")]
@@ -87,18 +90,29 @@ namespace Game.Player
         private bool _wasPausedLastFrame;
         private int _localBodyHiddenLayer = -1;
 
+        private void OnEnable()
+        {
+            RegisterPlayerContext();
+        }
+
+        private void OnDisable()
+        {
+            PlayerContextRegistry.Unregister(this, LocalPlayerId);
+        }
+
         private void Start()
         {
             ResolveHorizontalRotationTarget();
             InitializeCameraRotationFromCurrentPose();
             ConfigureLocalBodyVisibility();
             ResetLookInputState(_startupLookIgnoreFrames);
+            RegisterPlayerContext();
         }
 
         private void Update()
         {
-            PauseManager pauseManager = PauseManager.Instance;
-            bool isPaused = pauseManager != null && pauseManager.IsPaused;
+            RegisterPlayerContext();
+            bool isPaused = PauseManager.TryGetInstance(out PauseManager pauseManager) && pauseManager.IsPaused;
 
             UpdateGameplayCursorState(isPaused);
 
@@ -271,19 +285,40 @@ namespace Game.Player
             bool shouldLock = CanProcessCameraInput();
             if (!shouldLock)
             {
+                if (_wasGameplayCursorLocked)
+                {
+                    PlayerContextLocator.TryReleaseLocalCursorAuthority(CursorAuthorityOwner);
+                }
+
                 _wasGameplayCursorLocked = false;
                 return;
+            }
+
+            if (PlayerContextLocator.TryGetLocalPresentationState(out LocalPlayerPresentationState presentationState)
+                && presentationState != null)
+            {
+                if (presentationState.Mode != LocalPlayerPresentationMode.FreePlay
+                    || !presentationState.CanAcquireCursorAuthority(CursorAuthorityOwner))
+                {
+                    _wasGameplayCursorLocked = false;
+                    return;
+                }
             }
 
             bool cursorAlreadyLocked = Cursor.lockState == CursorLockMode.Locked && !Cursor.visible;
             if (!cursorAlreadyLocked)
             {
-                Cursor.lockState = CursorLockMode.Locked;
-                Cursor.visible = false;
+                if (!PlayerContextLocator.TryAcquireLocalCursorAuthority(CursorAuthorityOwner, CursorLockMode.Locked, false))
+                {
+                    Cursor.lockState = CursorLockMode.Locked;
+                    Cursor.visible = false;
+                }
+
                 ResetLookInputState(GetLookIgnoreFramesForContext());
             }
             else if (!_wasGameplayCursorLocked)
             {
+                PlayerContextLocator.TryAcquireLocalCursorAuthority(CursorAuthorityOwner, CursorLockMode.Locked, false);
                 ResetLookInputState(GetLookIgnoreFramesForContext());
             }
 
@@ -411,10 +446,21 @@ namespace Game.Player
             return _horizontalRotationTarget != null;
         }
 
-        private static bool CanProcessCameraInput()
+        private void RegisterPlayerContext()
         {
+            PlayerContextRegistry.RegisterOrUpdate(this, LocalPlayerId);
+            // TODO(MP-3): Split local camera ownership assignment from hardcoded local player id.
+        }
+
+        private bool CanProcessCameraInput()
+        {
+            if (!IsLocallyOwnedCamera())
+            {
+                return false;
+            }
+
             MinigameManager minigameManager = MinigameManager.Instance;
-            if (minigameManager != null && minigameManager.IsMinigameActive())
+            if (minigameManager != null && minigameManager.IsMinigameActiveForOwner(LocalPlayerId))
             {
                 return false;
             }
@@ -426,6 +472,13 @@ namespace Game.Player
             }
 
             return gameManager.CurrentState == GameState.FreePlay;
+        }
+
+        private bool IsLocallyOwnedCamera()
+        {
+            return PlayerContextLocator.TryGetLocalContext(out PlayerContext localContext)
+                   && localContext != null
+                   && localContext.FirstPersonCamera == this;
         }
     }
 }

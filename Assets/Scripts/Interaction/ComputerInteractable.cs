@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using Game.Minigames;
+using Game.Player;
 using UnityEngine;
 
 namespace Game.Interaction
@@ -94,7 +95,8 @@ namespace Game.Interaction
                 return;
             }
 
-            IMinigame startedMinigame = minigameManager.StartMinigame<ComputerMinigame>(data);
+            string ownerPlayerId = PlayerInventoryAuthority.GetLocalOwnerPlayerId();
+            IMinigame startedMinigame = minigameManager.StartMinigame<ComputerMinigame>(data, ownerPlayerId);
             if (startedMinigame == null)
             {
                 Debug.LogError(

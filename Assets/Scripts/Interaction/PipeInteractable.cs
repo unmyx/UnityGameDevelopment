@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using Game.Core;
 using Game.Core.Events;
 using Game.Minigames;
+using Game.Player;
 using TMPro;
 using UnityEngine;
 
@@ -189,7 +190,8 @@ namespace Game.Interaction
                 gameManager.RegisterDailyTaskLaunchContext(DailyTaskType, taskKey);
             }
 
-            MinigameManager.Instance?.StartMinigame<CleaningMinigame>(data);
+            string ownerPlayerId = PlayerInventoryAuthority.GetLocalOwnerPlayerId();
+            MinigameManager.Instance?.StartMinigame<CleaningMinigame>(data, ownerPlayerId);
         }
 
         public string GetDailyTaskLocationKey()

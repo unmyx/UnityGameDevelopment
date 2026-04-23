@@ -388,6 +388,11 @@ namespace Game.Core
 
         private void OnMinigameStarted(MinigameStartedEvent eventData)
         {
+            if (!IsLocalMinigameOwner(eventData.OwnerPlayerId))
+            {
+                return;
+            }
+
             if (_currentState == GameState.Minigame)
             {
                 return;
@@ -398,6 +403,11 @@ namespace Game.Core
 
         private void OnMinigameEnded(MinigameEndedEvent eventData)
         {
+            if (!IsLocalMinigameOwner(eventData.OwnerPlayerId))
+            {
+                return;
+            }
+
             if (_currentState == GameState.Minigame)
             {
                 ChangeStateInternal(GameState.FreePlay);
@@ -411,12 +421,27 @@ namespace Game.Core
 
         private void OnMinigameCancelled(MinigameCancelledEvent eventData)
         {
+            if (!IsLocalMinigameOwner(eventData.OwnerPlayerId))
+            {
+                return;
+            }
+
             if (_currentState == GameState.Minigame)
             {
                 ChangeStateInternal(GameState.FreePlay);
             }
 
             ClearPendingDailyTaskLaunchContext();
+        }
+
+        private static bool IsLocalMinigameOwner(string ownerPlayerId)
+        {
+            if (string.IsNullOrWhiteSpace(ownerPlayerId))
+            {
+                return true;
+            }
+
+            return PlayerInventoryAuthority.IsLocalOwner(ownerPlayerId);
         }
 
         private void EnsureServicesInitialized()
@@ -1318,6 +1343,12 @@ namespace Game.Core
 
         public bool TryRegisterStolenLootPickup(string itemId)
         {
+            return TryRegisterStolenLootPickup(itemId, PlayerInventoryAuthority.GetLocalOwnerPlayerId());
+        }
+
+        public bool TryRegisterStolenLootPickup(string itemId, string ownerPlayerId)
+        {
+            ValidateLocalOwnerStoragePath(ownerPlayerId, nameof(TryRegisterStolenLootPickup));
             string normalizedItemId = NormalizeStolenLootItemId(itemId);
             if (string.IsNullOrEmpty(normalizedItemId))
             {
@@ -1369,6 +1400,12 @@ namespace Game.Core
 
         public int GetStolenLootCountForItem(string itemId)
         {
+            return GetStolenLootCountForItem(itemId, PlayerInventoryAuthority.GetLocalOwnerPlayerId());
+        }
+
+        public int GetStolenLootCountForItem(string itemId, string ownerPlayerId)
+        {
+            ValidateLocalOwnerStoragePath(ownerPlayerId, nameof(GetStolenLootCountForItem));
             string normalizedItemId = NormalizeStolenLootItemId(itemId);
             if (string.IsNullOrEmpty(normalizedItemId))
             {
@@ -1394,6 +1431,12 @@ namespace Game.Core
 
         public bool TryUnregisterStolenLootForDrop(string itemId, int amount = 1)
         {
+            return TryUnregisterStolenLootForDrop(itemId, PlayerInventoryAuthority.GetLocalOwnerPlayerId(), amount);
+        }
+
+        public bool TryUnregisterStolenLootForDrop(string itemId, string ownerPlayerId, int amount = 1)
+        {
+            ValidateLocalOwnerStoragePath(ownerPlayerId, nameof(TryUnregisterStolenLootForDrop));
             string normalizedItemId = NormalizeStolenLootItemId(itemId);
             if (string.IsNullOrEmpty(normalizedItemId) || amount <= 0)
             {
@@ -1435,6 +1478,12 @@ namespace Game.Core
 
         public List<StolenLootEntryData> GetStolenLootThisDaySnapshot()
         {
+            return GetStolenLootThisDaySnapshot(PlayerInventoryAuthority.GetLocalOwnerPlayerId());
+        }
+
+        public List<StolenLootEntryData> GetStolenLootThisDaySnapshot(string ownerPlayerId)
+        {
+            ValidateLocalOwnerStoragePath(ownerPlayerId, nameof(GetStolenLootThisDaySnapshot));
             List<StolenLootEntryData> snapshot = new List<StolenLootEntryData>();
             for (int i = 0; i < _stolenLootThisDay.Count; i++)
             {
@@ -1463,13 +1512,27 @@ namespace Game.Core
 
         public List<StolenLootEntryData> ConsumeDayStolenLoot()
         {
-            List<StolenLootEntryData> consumedSnapshot = GetStolenLootThisDaySnapshot();
+            return ConsumeDayStolenLoot(PlayerInventoryAuthority.GetLocalOwnerPlayerId());
+        }
+
+        public List<StolenLootEntryData> ConsumeDayStolenLoot(string ownerPlayerId)
+        {
+            List<StolenLootEntryData> consumedSnapshot = GetStolenLootThisDaySnapshot(ownerPlayerId);
             ClearStolenLootThisDay();
             return consumedSnapshot;
         }
 
         public bool TrySellTrackedStolenLootInHome(out int soldItemCount, out int payoutAmount)
         {
+            return TrySellTrackedStolenLootInHome(
+                PlayerInventoryAuthority.GetLocalOwnerPlayerId(),
+                out soldItemCount,
+                out payoutAmount);
+        }
+
+        public bool TrySellTrackedStolenLootInHome(string ownerPlayerId, out int soldItemCount, out int payoutAmount)
+        {
+            ValidateLocalOwnerStoragePath(ownerPlayerId, nameof(TrySellTrackedStolenLootInHome));
             soldItemCount = 0;
             payoutAmount = 0;
 
@@ -1489,7 +1552,7 @@ namespace Game.Core
                 return false;
             }
 
-            List<StolenLootEntryData> trackedLootSnapshot = GetStolenLootThisDaySnapshot();
+            List<StolenLootEntryData> trackedLootSnapshot = GetStolenLootThisDaySnapshot(ownerPlayerId);
             if (trackedLootSnapshot == null || trackedLootSnapshot.Count == 0)
             {
                 return true;
@@ -1514,7 +1577,7 @@ namespace Game.Core
                     continue;
                 }
 
-                int removedCount = _inventorySystem.RemoveItemsByItemId(normalizedItemId, requestedCount);
+                int removedCount = _inventorySystem.RemoveItemsByItemId(normalizedItemId, requestedCount, ownerPlayerId);
                 if (removedCount > 0)
                 {
                     totalRemoved += removedCount;
@@ -1553,6 +1616,20 @@ namespace Game.Core
             out int payoutAmount,
             out int remainingTrackedCount)
         {
+            return TrySellTrackedStolenLootItemUnitInHome(
+                itemId,
+                PlayerInventoryAuthority.GetLocalOwnerPlayerId(),
+                out payoutAmount,
+                out remainingTrackedCount);
+        }
+
+        public bool TrySellTrackedStolenLootItemUnitInHome(
+            string itemId,
+            string ownerPlayerId,
+            out int payoutAmount,
+            out int remainingTrackedCount)
+        {
+            ValidateLocalOwnerStoragePath(ownerPlayerId, nameof(TrySellTrackedStolenLootItemUnitInHome));
             payoutAmount = 0;
             remainingTrackedCount = 0;
 
@@ -1577,7 +1654,7 @@ namespace Game.Core
                 return false;
             }
 
-            int trackedCount = GetStolenLootCountForItem(normalizedItemId);
+            int trackedCount = GetStolenLootCountForItem(normalizedItemId, ownerPlayerId);
             if (trackedCount <= 0)
             {
                 return false;
@@ -1589,7 +1666,7 @@ namespace Game.Core
                 return false;
             }
 
-            int removedCount = _inventorySystem.RemoveItemsByItemId(normalizedItemId, 1);
+            int removedCount = _inventorySystem.RemoveItemsByItemId(normalizedItemId, 1, ownerPlayerId);
             if (removedCount <= 0)
             {
                 return false;
@@ -1601,7 +1678,7 @@ namespace Game.Core
                 ModifyCurrency(payoutAmount);
             }
 
-            List<StolenLootEntryData> trackedLootSnapshot = GetStolenLootThisDaySnapshot();
+            List<StolenLootEntryData> trackedLootSnapshot = GetStolenLootThisDaySnapshot(ownerPlayerId);
             List<StolenLootEntryData> updatedTrackedLoot = new List<StolenLootEntryData>(trackedLootSnapshot.Count);
 
             for (int i = 0; i < trackedLootSnapshot.Count; i++)
@@ -1637,14 +1714,20 @@ namespace Game.Core
             }
 
             RestoreStolenLootThisDayFromSave(updatedTrackedLoot);
-            remainingTrackedCount = GetStolenLootCountForItem(normalizedItemId);
+            remainingTrackedCount = GetStolenLootCountForItem(normalizedItemId, ownerPlayerId);
             return true;
         }
 
         public List<SellableStolenLootEntryData> GetSellableStolenLootEntriesInHome()
         {
+            return GetSellableStolenLootEntriesInHome(PlayerInventoryAuthority.GetLocalOwnerPlayerId());
+        }
+
+        public List<SellableStolenLootEntryData> GetSellableStolenLootEntriesInHome(string ownerPlayerId)
+        {
+            ValidateLocalOwnerStoragePath(ownerPlayerId, nameof(GetSellableStolenLootEntriesInHome));
             List<SellableStolenLootEntryData> entries = new List<SellableStolenLootEntryData>();
-            List<StolenLootEntryData> trackedLootSnapshot = GetStolenLootThisDaySnapshot();
+            List<StolenLootEntryData> trackedLootSnapshot = GetStolenLootThisDaySnapshot(ownerPlayerId);
             if (trackedLootSnapshot == null || trackedLootSnapshot.Count <= 0)
             {
                 return entries;
@@ -2164,7 +2247,22 @@ namespace Game.Core
 
         public bool TryGetAuthoritativePlayerTransform(out Transform playerTransform)
         {
-            if (_freePlayState != null && _freePlayState.TryGetAuthoritativePlayerTransform(out playerTransform) && playerTransform != null)
+            if (PlayerContextLocator.TryGetLocalPlayerTransform(out playerTransform) && playerTransform != null)
+            {
+                return true;
+            }
+
+            if (PlayerContextLocator.IsCompatibilityFallbackAllowed()
+                && _freePlayState != null
+                && _freePlayState.TryGetAuthoritativePlayerTransform(out playerTransform)
+                && playerTransform != null)
+            {
+                return true;
+            }
+
+            if (PlayerContextLocator.IsCompatibilityFallbackAllowed()
+                && PlayerContextLocator.TryGetAuthoritativePlayerTransform(out playerTransform)
+                && playerTransform != null)
             {
                 return true;
             }
@@ -2204,7 +2302,17 @@ namespace Game.Core
 
         public int GetSelectedInventorySlotIndexForSave()
         {
-            InventoryGridUI inventoryGridUI = UnityEngine.Object.FindAnyObjectByType<InventoryGridUI>();
+            if (PlayerContextLocator.TryGetLocalContext(out PlayerContext localContext) && localContext != null)
+            {
+                return Mathf.Max(0, localContext.SelectedQuickSlotIndex);
+            }
+
+            PlayerContextLocator.TryGetLocalInventoryGridUI(out InventoryGridUI inventoryGridUI);
+            if (inventoryGridUI == null && PlayerContextLocator.IsCompatibilityFallbackAllowed())
+            {
+                PlayerContextLocator.TryGetInventoryGridUI(out inventoryGridUI);
+            }
+
             if (inventoryGridUI == null)
             {
                 return 0;
@@ -2215,13 +2323,24 @@ namespace Game.Core
 
         public void RestoreSelectedInventorySlotFromSave(int selectedSlotIndex)
         {
-            InventoryGridUI inventoryGridUI = UnityEngine.Object.FindAnyObjectByType<InventoryGridUI>();
+            int normalizedSelectedSlotIndex = Mathf.Max(0, selectedSlotIndex);
+            if (PlayerContextLocator.TryGetLocalContext(out PlayerContext localContext) && localContext != null)
+            {
+                localContext.SetSelectedQuickSlotIndex(normalizedSelectedSlotIndex);
+            }
+
+            PlayerContextLocator.TryGetLocalInventoryGridUI(out InventoryGridUI inventoryGridUI);
+            if (inventoryGridUI == null && PlayerContextLocator.IsCompatibilityFallbackAllowed())
+            {
+                PlayerContextLocator.TryGetInventoryGridUI(out inventoryGridUI);
+            }
+
             if (inventoryGridUI == null)
             {
                 return;
             }
 
-            inventoryGridUI.RestoreSelectedSlotFromSave(selectedSlotIndex);
+            inventoryGridUI.RestoreSelectedSlotFromSave(normalizedSelectedSlotIndex);
         }
 
         public bool IsInState(GameState state)
@@ -2697,6 +2816,11 @@ namespace Game.Core
                 : upgradeId.Trim().ToLowerInvariant();
         }
 
+        private void ValidateLocalOwnerStoragePath(string ownerPlayerId, string callsite)
+        {
+            PlayerInventoryAuthority.LogNonLocalOwnerUsage($"GameManager.{callsite}", ownerPlayerId, this);
+        }
+
         private HomeUpgradeStatusData BuildHomeUpgradeStatus(string upgradeId)
         {
             string normalizedUpgradeId = NormalizeUpgradeId(upgradeId);
@@ -2953,8 +3077,15 @@ namespace Game.Core
 
         private bool IsRunPhaseTransitionBlocked(out string failureReason)
         {
+            if (PlayerContextLocator.TryGetLocalPresentationMode(out LocalPlayerPresentationMode mode)
+                && mode == LocalPlayerPresentationMode.Minigame)
+            {
+                failureReason = "A local minigame presentation is active.";
+                return true;
+            }
+
             MinigameManager minigameManager = MinigameManager.Instance;
-            if (minigameManager != null && minigameManager.IsMinigameActive())
+            if (minigameManager != null && minigameManager.IsMinigameActiveForOwner(PlayerContextRegistry.DefaultLocalPlayerId))
             {
                 failureReason = "A minigame is currently active.";
                 return true;
@@ -3038,7 +3169,12 @@ namespace Game.Core
 
         private static void RefreshInventoryGridUiBindings(bool forceFullRefresh = false)
         {
-            InventoryGridUI inventoryGridUI = UnityEngine.Object.FindAnyObjectByType<InventoryGridUI>();
+            PlayerContextLocator.TryGetLocalInventoryGridUI(out InventoryGridUI inventoryGridUI);
+            if (inventoryGridUI == null && PlayerContextLocator.IsCompatibilityFallbackAllowed())
+            {
+                PlayerContextLocator.TryGetInventoryGridUI(out inventoryGridUI);
+            }
+
             if (inventoryGridUI == null)
             {
                 return;

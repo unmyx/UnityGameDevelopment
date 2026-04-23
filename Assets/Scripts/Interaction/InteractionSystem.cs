@@ -1,23 +1,24 @@
-﻿using UnityEngine;
-using Game.Input;
 using Game.Core;
+using Game.Input;
 using Game.Minigames;
+using Game.Player;
+using UnityEngine;
 
 namespace Game.Interaction
 {
     /// <summary>
     /// InteractionSystem handles both raycast and trigger-based interactions.
-    /// 
+    ///
     /// Features:
     /// - Raycasts from camera center to detect interactables
     /// - Configurable raycast range
     /// - Highlights/displays current interactable target
     /// - Debug visualization of raycasts
     /// - Input handling (E key)
-    /// 
+    ///
     /// Architecture:
     /// - Raycast Interaction: Primary (direct interaction with objects)
-    /// 
+    ///
     /// Setup:
     /// 1. Place this on the player or a child object
     /// 2. Assign the camera this script should raycast from
@@ -27,6 +28,8 @@ namespace Game.Interaction
     /// </summary>
     public class InteractionSystem : MonoBehaviour
     {
+        private const string LocalPlayerId = PlayerContextRegistry.DefaultLocalPlayerId;
+
         [Header("Raycast Interaction")]
         [SerializeField]
         private Camera _raycastCamera;
@@ -53,6 +56,9 @@ namespace Game.Interaction
 
         private void OnEnable()
         {
+            PlayerContextRegistry.RegisterOrUpdate(this, LocalPlayerId);
+            TryResolveRaycastCameraFromContext();
+
             if (_raycastCamera == null)
             {
                 Debug.LogError(
@@ -67,11 +73,19 @@ namespace Game.Interaction
 
         private void OnDisable()
         {
+            PlayerContextRegistry.Unregister(this, LocalPlayerId);
             UnsubscribeFromInput();
         }
 
         private void Update()
         {
+            if (!IsLocallyOwnedInteractionSystem())
+            {
+                UnsubscribeFromInput();
+                return;
+            }
+
+            TryResolveRaycastCameraFromContext();
             TrySubscribeToInput();
             UpdateRaycastInteraction();
             HandleQueuedInteractRequest();
@@ -174,7 +188,9 @@ namespace Game.Interaction
         private void DebugDrawRaycast()
         {
             if (_raycastCamera == null)
+            {
                 return;
+            }
 
             Ray ray = new Ray(_raycastCamera.transform.position, _raycastCamera.transform.forward);
             Color rayColor = _currentInteractable != null ? Color.green : Color.white;
@@ -222,6 +238,11 @@ namespace Game.Interaction
         private void TrySubscribeToInput()
         {
             if (_isSubscribedToInteract)
+            {
+                return;
+            }
+
+            if (!IsLocallyOwnedInteractionSystem())
             {
                 return;
             }
@@ -280,8 +301,16 @@ namespace Game.Interaction
                 return true;
             }
 
+            if (PlayerContextLocator.TryGetLocalPresentationMode(out LocalPlayerPresentationMode mode)
+                && mode != LocalPlayerPresentationMode.Unknown
+                && mode != LocalPlayerPresentationMode.FreePlay)
+            {
+                reason = $"presentation_mode:{mode}";
+                return true;
+            }
+
             MinigameManager minigameManager = MinigameManager.Instance;
-            if (minigameManager != null && minigameManager.IsMinigameActive())
+            if (minigameManager != null && minigameManager.IsMinigameActiveForOwner(LocalPlayerId))
             {
                 reason = "minigame_active";
                 return true;
@@ -331,6 +360,40 @@ namespace Game.Interaction
             return $"{interactable.name} ({interactable.GetType().Name})";
         }
 
+        private void TryResolveRaycastCameraFromContext()
+        {
+            if (_raycastCamera != null)
+            {
+                return;
+            }
+
+            if (PlayerContextLocator.TryGetLocalFirstPersonCamera(out FirstPersonCamera firstPersonCamera)
+                && firstPersonCamera != null)
+            {
+                _raycastCamera = firstPersonCamera.GetComponent<Camera>();
+            }
+
+            if (_raycastCamera == null
+                && PlayerContextLocator.IsCompatibilityFallbackAllowed()
+                && PlayerContextLocator.TryGetFirstPersonCamera(out firstPersonCamera)
+                && firstPersonCamera != null)
+            {
+                _raycastCamera = firstPersonCamera.GetComponent<Camera>();
+            }
+
+            if (_raycastCamera == null)
+            {
+                _raycastCamera = GetComponentInParent<Camera>();
+            }
+
+            // TODO(MP-4): Remove compatibility fallback once per-player camera bootstrap/rebind is explicit in scene setup.
+        }
+
+        private bool IsLocallyOwnedInteractionSystem()
+        {
+            return PlayerContextLocator.TryGetLocalContext(out PlayerContext localContext)
+                   && localContext != null
+                   && localContext.InteractionSystem == this;
+        }
     }
 }
-

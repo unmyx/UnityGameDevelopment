@@ -4,6 +4,7 @@ using Game.Core;
 using UnityEngine.UI;
 using UnityEngine.EventSystems;
 using Game.Input;
+using Game.Player;
 
 namespace Game.Minigames
 {
@@ -87,6 +88,7 @@ namespace Game.Minigames
         private CursorLockMode _previousCursorLockMode;
         private bool _previousCursorVisible;
         private bool _hasLoggedMissingEventSystem;
+        private bool _usesPresentationCursorAuthority;
 
         private const int UiSortingOrder = 500;
 
@@ -119,10 +121,8 @@ namespace Game.Minigames
 
             if (_unlockCursorDuringMinigame)
             {
-                _previousCursorLockMode = Cursor.lockState;
-                _previousCursorVisible = Cursor.visible;
-                Cursor.lockState = CursorLockMode.None;
-                Cursor.visible = true;
+                // TODO(MP-6): Replace global cursor-lock toggles with per-player presentation ownership when concurrent minigames are supported.
+                AcquireMinigameCursorAuthority();
             }
 
             EnsureUI();
@@ -169,8 +169,7 @@ namespace Game.Minigames
 
             if (_unlockCursorDuringMinigame)
             {
-                Cursor.lockState = _previousCursorLockMode;
-                Cursor.visible = _previousCursorVisible;
+                ReleaseMinigameCursorAuthority();
             }
         }
 
@@ -944,6 +943,34 @@ namespace Game.Minigames
 
             CompletePendingResult();
             return true;
+        }
+
+        private void AcquireMinigameCursorAuthority()
+        {
+            if (PlayerContextLocator.TryAcquireLocalCursorAuthority("minigame_lie", CursorLockMode.None, true))
+            {
+                _usesPresentationCursorAuthority = true;
+                return;
+            }
+
+            _usesPresentationCursorAuthority = false;
+            _previousCursorLockMode = Cursor.lockState;
+            _previousCursorVisible = Cursor.visible;
+            Cursor.lockState = CursorLockMode.None;
+            Cursor.visible = true;
+        }
+
+        private void ReleaseMinigameCursorAuthority()
+        {
+            if (_usesPresentationCursorAuthority)
+            {
+                PlayerContextLocator.TryReleaseLocalCursorAuthority("minigame_lie");
+                _usesPresentationCursorAuthority = false;
+                return;
+            }
+
+            Cursor.lockState = _previousCursorLockMode;
+            Cursor.visible = _previousCursorVisible;
         }
 
         public bool RequestFollowUpConfirm()

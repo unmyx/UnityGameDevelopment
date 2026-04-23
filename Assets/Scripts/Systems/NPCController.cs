@@ -28,6 +28,7 @@ namespace Game.Systems
         }
 
         [Header("References")]
+        // TODO(MP-2): Replace single serialized player target with player-context aware target arbitration.
         [SerializeField] private Transform player;
         [SerializeField] private Transform head;
 
@@ -140,6 +141,7 @@ namespace Game.Systems
 
         private bool hasCaughtPlayer;
         private bool triggeredMinigame;
+        private string _activeLieMinigameOwnerPlayerId = PlayerContextRegistry.DefaultLocalPlayerId;
         private bool _isCrossingLink = false;
 
         private const int RoamTargetAttempts = 12;
@@ -153,10 +155,16 @@ namespace Game.Systems
         {
             if (player == null)
             {
-                PlayerController playerController = Object.FindAnyObjectByType<PlayerController>();
-                if (playerController != null)
+                if (PlayerContextLocator.TryGetLocalPlayerTransform(out Transform playerTransform)
+                    && playerTransform != null)
                 {
-                    player = playerController.transform;
+                    player = playerTransform;
+                }
+                else if (PlayerContextLocator.IsCompatibilityFallbackAllowed()
+                         && PlayerContextLocator.TryGetAuthoritativePlayerTransform(out playerTransform)
+                         && playerTransform != null)
+                {
+                    player = playerTransform;
                 }
             }
 
@@ -650,12 +658,14 @@ namespace Game.Systems
             if (manager != null)
             {
                 MinigameData data = BuildLieMinigameData();
-                IMinigame active = manager.StartMinigame<LieMinigame>(data);
+                string ownerPlayerId = PlayerInventoryAuthority.GetLocalOwnerPlayerId();
+                IMinigame active = manager.StartMinigame<LieMinigame>(data, ownerPlayerId);
                 if (active != null)
                 {
                     hasCaughtPlayer = true;
                     _awaitingMinigameEnd = true;
                     triggeredMinigame = true;
+                    _activeLieMinigameOwnerPlayerId = ownerPlayerId;
 
                     if (player != null)
                     {
@@ -673,6 +683,7 @@ namespace Game.Systems
                     hasCaughtPlayer = false;
                     _awaitingMinigameEnd = false;
                     triggeredMinigame = false;
+                    _activeLieMinigameOwnerPlayerId = PlayerContextRegistry.DefaultLocalPlayerId;
                     Debug.LogWarning("[NPCController] Lie minigame did not start (another minigame may already be active).");
                 }
             }
@@ -681,6 +692,7 @@ namespace Game.Systems
                 hasCaughtPlayer = false;
                 _awaitingMinigameEnd = false;
                 triggeredMinigame = false;
+                _activeLieMinigameOwnerPlayerId = PlayerContextRegistry.DefaultLocalPlayerId;
                 Debug.LogWarning("[NPCController] MinigameManager instance not found.");
             }
         }
@@ -887,6 +899,7 @@ namespace Game.Systems
             _postLieMinigameGraceTimer = Mathf.Max(0f, postLieMinigameGraceDuration);
             _postLieFailAlertTimer = 0f;
             _postLieFailChaseTimer = 0f;
+            _activeLieMinigameOwnerPlayerId = PlayerContextRegistry.DefaultLocalPlayerId;
 
             if (_freezeProbeRoutine != null)
             {
@@ -924,6 +937,16 @@ namespace Game.Systems
                 return;
             }
 
+            if (!string.Equals(eventData.MinigameId, "lie_detection", System.StringComparison.Ordinal))
+            {
+                return;
+            }
+
+            if (!string.Equals(eventData.OwnerPlayerId, _activeLieMinigameOwnerPlayerId, System.StringComparison.Ordinal))
+            {
+                return;
+            }
+
             if (eventData.Result == MinigameResult.Fail || eventData.Result == MinigameResult.Timeout)
             {
                 HandleLieFailResolution();
@@ -933,9 +956,19 @@ namespace Game.Systems
             ResetAfterMinigame();
         }
 
-        private void OnMinigameCancelled(MinigameCancelledEvent _)
+        private void OnMinigameCancelled(MinigameCancelledEvent eventData)
         {
             if (!triggeredMinigame)
+            {
+                return;
+            }
+
+            if (!string.Equals(eventData.MinigameId, "lie_detection", System.StringComparison.Ordinal))
+            {
+                return;
+            }
+
+            if (!string.Equals(eventData.OwnerPlayerId, _activeLieMinigameOwnerPlayerId, System.StringComparison.Ordinal))
             {
                 return;
             }
@@ -1090,7 +1123,8 @@ namespace Game.Systems
                 return;
             }
 
-            List<StolenLootEntryData> stolenLootToConfiscate = gameManager.ConsumeDayStolenLoot();
+            string ownerPlayerId = PlayerInventoryAuthority.GetLocalOwnerPlayerId();
+            List<StolenLootEntryData> stolenLootToConfiscate = gameManager.ConsumeDayStolenLoot(ownerPlayerId);
             if (stolenLootToConfiscate == null || stolenLootToConfiscate.Count <= 0)
             {
                 return;
@@ -1340,10 +1374,16 @@ namespace Game.Systems
         {
             if (player == null)
             {
-                PlayerController playerController = Object.FindAnyObjectByType<PlayerController>();
-                if (playerController != null)
+                if (PlayerContextLocator.TryGetLocalPlayerTransform(out Transform playerTransform)
+                    && playerTransform != null)
                 {
-                    player = playerController.transform;
+                    player = playerTransform;
+                }
+                else if (PlayerContextLocator.IsCompatibilityFallbackAllowed()
+                         && PlayerContextLocator.TryGetAuthoritativePlayerTransform(out playerTransform)
+                         && playerTransform != null)
+                {
+                    player = playerTransform;
                 }
                 else if (!_hasLoggedMissingPlayerReference)
                 {

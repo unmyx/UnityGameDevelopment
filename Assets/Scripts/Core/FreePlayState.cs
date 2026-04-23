@@ -21,6 +21,7 @@ namespace Game.Core
                 return;
             }
 
+            PlayerContextLocator.TrySetLocalPresentationMode(LocalPlayerPresentationMode.FreePlay);
             SetPlayerControlEnabled(true);
         }
 

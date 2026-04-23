@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using Game.Minigames;
 using Game.Inventory;
 using Game.Core.Events;
+using Game.Player;
 
 namespace Game.Core
 {
@@ -690,7 +691,8 @@ namespace Game.Core
                     continue;
                 }
 
-                bool added = inventorySystem.AddItem(rewardItem);
+                string ownerPlayerId = PlayerInventoryAuthority.GetLocalOwnerPlayerId();
+                bool added = inventorySystem.AddItem(rewardItem, ownerPlayerId);
                 if (added)
                 {
                     EventBus.Publish(new ItemPickedUpEvent(rewardItem.ItemName));

@@ -19,6 +19,8 @@ namespace Game.Player
     /// </summary>
     public class PlayerInputHandler : MonoBehaviour
     {
+        private const string LocalPlayerId = PlayerContextRegistry.DefaultLocalPlayerId;
+
         public Vector2 MovementInput { get; private set; }
         public Vector2 LookInput { get; private set; }
         public bool JumpPressed { get; private set; }
@@ -26,10 +28,26 @@ namespace Game.Player
 
         public bool CrouchPressed { get; private set; }
 
+        private void OnEnable()
+        {
+            PlayerContextRegistry.RegisterOrUpdate(this, LocalPlayerId);
+        }
+
+        private void OnDisable()
+        {
+            PlayerContextRegistry.Unregister(this, LocalPlayerId);
+        }
+
         private void Update()
         {
-            PauseManager pauseManager = PauseManager.Instance;
-            if (pauseManager != null && pauseManager.IsPaused)
+            PlayerContextRegistry.RegisterOrUpdate(this, LocalPlayerId);
+            if (!IsLocallyOwned())
+            {
+                ResetInputs();
+                return;
+            }
+
+            if (PauseManager.TryGetInstance(out PauseManager pauseManager) && pauseManager.IsPaused)
             {
                 ResetInputs();
                 return;
@@ -83,10 +101,17 @@ namespace Game.Player
             CrouchPressed = false;
         }
 
-        private static bool CanPollInput()
+        private bool CanPollInput()
         {
+            if (PlayerContextLocator.TryGetLocalPresentationMode(out LocalPlayerPresentationMode mode)
+                && mode != LocalPlayerPresentationMode.Unknown
+                && mode != LocalPlayerPresentationMode.FreePlay)
+            {
+                return false;
+            }
+
             MinigameManager minigameManager = MinigameManager.Instance;
-            if (minigameManager != null && minigameManager.IsMinigameActive())
+            if (minigameManager != null && minigameManager.IsMinigameActiveForOwner(LocalPlayerId))
             {
                 return false;
             }
@@ -98,6 +123,13 @@ namespace Game.Player
             }
 
             return gameManager.CurrentState == GameState.FreePlay;
+        }
+
+        private bool IsLocallyOwned()
+        {
+            return PlayerContextLocator.TryGetLocalContext(out PlayerContext localContext)
+                   && localContext != null
+                   && localContext.InputHandler == this;
         }
     }
 }

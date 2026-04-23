@@ -3,6 +3,7 @@ using System;
 using Game.Core;
 using Game.Core.Events;
 using Game.Minigames;
+using Game.Player;
 using TMPro;
 using UnityEngine;
 using UnityEngine.UI;
@@ -150,7 +151,8 @@ namespace Game.Interaction
                 gameManager.RegisterDailyTaskLaunchContext(DailyTaskType, taskKey);
             }
 
-            MinigameManager.Instance?.StartMinigame<WeldingFillMinigame>(data);
+            string ownerPlayerId = PlayerInventoryAuthority.GetLocalOwnerPlayerId();
+            MinigameManager.Instance?.StartMinigame<WeldingFillMinigame>(data, ownerPlayerId);
         }
 
         public string GetDailyTaskLocationKey()

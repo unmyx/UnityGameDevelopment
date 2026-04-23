@@ -15,6 +15,7 @@ namespace Game.Core
 
         public void OnStateEnter()
         {
+            PlayerContextLocator.TrySetLocalPresentationMode(LocalPlayerPresentationMode.Menu);
             DisablePlayerInput();
         }
 
@@ -24,6 +25,7 @@ namespace Game.Core
 
         public void OnStateExit()
         {
+            PlayerContextLocator.TrySetLocalPresentationMode(LocalPlayerPresentationMode.FreePlay);
             EnablePlayerInput();
         }
 

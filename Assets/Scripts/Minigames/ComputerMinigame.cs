@@ -68,6 +68,7 @@ namespace Game.Minigames
 
         private CursorLockMode _previousCursorLockMode;
         private bool _previousCursorVisible;
+        private bool _usesPresentationCursorAuthority;
 
         protected override void OnInitialize()
         {
@@ -107,10 +108,7 @@ namespace Game.Minigames
 
             if (_unlockCursorDuringMinigame)
             {
-                _previousCursorLockMode = Cursor.lockState;
-                _previousCursorVisible = Cursor.visible;
-                Cursor.lockState = CursorLockMode.None;
-                Cursor.visible = true;
+                AcquireMinigameCursorAuthority();
             }
 
             if (_uiController != null)
@@ -159,8 +157,7 @@ namespace Game.Minigames
 
             if (_unlockCursorDuringMinigame)
             {
-                Cursor.lockState = _previousCursorLockMode;
-                Cursor.visible = _previousCursorVisible;
+                ReleaseMinigameCursorAuthority();
             }
 
             TearDownWorldViewPresentation();
@@ -257,8 +254,10 @@ namespace Game.Minigames
                 return;
             }
 
+            string ownerPlayerId = PlayerInventoryAuthority.GetLocalOwnerPlayerId();
             bool success = gameManager.TrySellTrackedStolenLootItemUnitInHome(
                 itemId,
+                ownerPlayerId,
                 out int payoutAmount,
                 out int remainingTrackedCount);
             if (!success)
@@ -323,8 +322,9 @@ namespace Game.Minigames
                 return;
             }
 
+            string ownerPlayerId = PlayerInventoryAuthority.GetLocalOwnerPlayerId();
             System.Collections.Generic.List<GameManager.SellableStolenLootEntryData> sellEntries =
-                gameManager.GetSellableStolenLootEntriesInHome();
+                gameManager.GetSellableStolenLootEntriesInHome(ownerPlayerId);
             _uiController.SetRuntimeSummary(gameManager.GetCurrency(), sellEntries != null ? sellEntries.Count : 0);
             _uiController.SetSellEntries(sellEntries);
             _uiController.SetUpgradeEntries(gameManager.GetHomeUpgradeStatusEntries());
@@ -542,7 +542,33 @@ namespace Game.Minigames
                 return _gameplayViewCamera;
             }
 
-            FirstPersonCamera firstPersonCamera = FindAnyObjectByType<FirstPersonCamera>();
+            if (PlayerContextLocator.TryGetLocalFirstPersonCamera(out FirstPersonCamera localFirstPersonCamera)
+                && localFirstPersonCamera != null)
+            {
+                _gameplayViewCamera = localFirstPersonCamera.GetComponent<Camera>();
+                if (_gameplayViewCamera != null)
+                {
+                    return _gameplayViewCamera;
+                }
+            }
+
+            FirstPersonCamera firstPersonCamera = null;
+            if (PlayerContextLocator.IsCompatibilityFallbackAllowed()
+                && PlayerContextLocator.TryGetFirstPersonCamera(out firstPersonCamera)
+                && firstPersonCamera != null)
+            {
+                _gameplayViewCamera = firstPersonCamera.GetComponent<Camera>();
+                if (_gameplayViewCamera != null)
+                {
+                    return _gameplayViewCamera;
+                }
+            }
+
+            if (PlayerContextLocator.IsCompatibilityFallbackAllowed())
+            {
+                firstPersonCamera = FindAnyObjectByType<FirstPersonCamera>();
+            }
+
             if (firstPersonCamera != null)
             {
                 _gameplayViewCamera = firstPersonCamera.GetComponent<Camera>();
@@ -552,7 +578,12 @@ namespace Game.Minigames
                 }
             }
 
-            _gameplayViewCamera = Camera.main;
+            if (PlayerContextLocator.IsCompatibilityFallbackAllowed())
+            {
+                _gameplayViewCamera = Camera.main;
+            }
+
+            // TODO(MP-6): Remove compatibility camera fallbacks once per-player concurrent minigame presentation is supported.
             return _gameplayViewCamera;
         }
 
@@ -591,6 +622,12 @@ namespace Game.Minigames
             if (!_suppressGameplayCameraRendering)
             {
                 return;
+            }
+
+            if (PlayerContextLocator.TryGetLocalPresentationState(out LocalPlayerPresentationState presentationState)
+                && presentationState != null)
+            {
+                presentationState.SetGameplayCameraSuppressed(suppressed);
             }
 
             Camera gameplayCamera = ResolveGameplayViewCamera();
@@ -752,6 +789,34 @@ namespace Game.Minigames
             _isSetupValid = false;
             _setupFailureReason = reason;
             Debug.LogError($"[ComputerMinigame] {reason}", this);
+        }
+
+        private void AcquireMinigameCursorAuthority()
+        {
+            if (PlayerContextLocator.TryAcquireLocalCursorAuthority("minigame_computer", CursorLockMode.None, true))
+            {
+                _usesPresentationCursorAuthority = true;
+                return;
+            }
+
+            _usesPresentationCursorAuthority = false;
+            _previousCursorLockMode = Cursor.lockState;
+            _previousCursorVisible = Cursor.visible;
+            Cursor.lockState = CursorLockMode.None;
+            Cursor.visible = true;
+        }
+
+        private void ReleaseMinigameCursorAuthority()
+        {
+            if (_usesPresentationCursorAuthority)
+            {
+                PlayerContextLocator.TryReleaseLocalCursorAuthority("minigame_computer");
+                _usesPresentationCursorAuthority = false;
+                return;
+            }
+
+            Cursor.lockState = _previousCursorLockMode;
+            Cursor.visible = _previousCursorVisible;
         }
     }
 }

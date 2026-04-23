@@ -17,6 +17,8 @@ namespace Game.UI
     /// </summary>
     public class InventoryGridUI : MonoBehaviour
     {
+        private const string LocalPlayerId = PlayerContextRegistry.DefaultLocalPlayerId;
+
         [Serializable]
         private class DropPrefabEntry
         {
@@ -185,6 +187,7 @@ namespace Game.UI
 
         private void OnEnable()
         {
+            RegisterLocalContext();
             TrySubscribe();
             TrySubscribeInput();
             TryRefreshHeldItemAnchorBinding();
@@ -193,6 +196,7 @@ namespace Game.UI
 
         private void OnDisable()
         {
+            PlayerContextRegistry.Unregister(this, LocalPlayerId);
             Unsubscribe();
             UnsubscribeInput();
             ClearHeldItemObject();
@@ -282,6 +286,8 @@ namespace Game.UI
 
         private void Update()
         {
+            RegisterLocalContext();
+
             if (!_subscribed)
             {
                 TrySubscribe();
@@ -325,6 +331,7 @@ namespace Game.UI
                 ClearAllSlots();
                 ApplySelectedSlotVisuals();
                 RefreshHeldItemObject();
+                SyncSelectedSlotToLocalContext();
                 return;
             }
 
@@ -356,6 +363,7 @@ namespace Game.UI
             ApplySelectedSlotVisuals();
             RefreshHeldItemObject();
             RefreshSelectedItemPreview();
+            SyncSelectedSlotToLocalContext();
         }
 
         public int GetSelectedSlotIndex()
@@ -476,6 +484,7 @@ namespace Game.UI
             }
 
             _selectedSlotIndex = clampedIndex;
+            SyncSelectedSlotToLocalContext();
             ApplySelectedSlotVisuals();
 
             if (forceRefresh || previousIndex != _selectedSlotIndex)
@@ -701,6 +710,8 @@ namespace Game.UI
                 return false;
             }
 
+            string ownerPlayerId = PlayerInventoryAuthority.GetLocalOwnerPlayerId();
+
             if (!TryResolveSelectedSlotGridCoordinates(out int gridX, out int gridY))
             {
                 return false;
@@ -729,7 +740,7 @@ namespace Game.UI
                 return false;
             }
 
-            InventoryItem removedItem = inventorySystem.RemoveItemAt(gridX, gridY);
+            InventoryItem removedItem = inventorySystem.RemoveItemAt(gridX, gridY, ownerPlayerId);
             if (removedItem == null)
             {
                 return false;
@@ -738,7 +749,7 @@ namespace Game.UI
             GameObject spawned = Instantiate(dropPrefab, spawnPosition, spawnRotation);
             if (spawned == null)
             {
-                bool restored = RestoreRemovedItemAfterDropFailure(inventorySystem, removedItem, gridX, gridY);
+                bool restored = RestoreRemovedItemAfterDropFailure(inventorySystem, removedItem, gridX, gridY, ownerPlayerId);
                 Debug.LogWarning(
                     $"[InventoryGridUI] Failed to instantiate dropped item prefab for '{removedItem.ItemId}'. " +
                     (restored ? "Restored item to inventory." : "Rollback failed; item may be lost."),
@@ -750,7 +761,7 @@ namespace Game.UI
             if (droppedInteractable == null)
             {
                 Destroy(spawned);
-                bool restored = RestoreRemovedItemAfterDropFailure(inventorySystem, removedItem, gridX, gridY);
+                bool restored = RestoreRemovedItemAfterDropFailure(inventorySystem, removedItem, gridX, gridY, ownerPlayerId);
                 Debug.LogWarning(
                     $"[InventoryGridUI] Dropped prefab for '{removedItem.ItemId}' is missing InteractableItem on root. " +
                     (restored ? "Restored item to inventory." : "Rollback failed; item may be lost."),
@@ -759,7 +770,7 @@ namespace Game.UI
             }
 
             droppedInteractable.DisablePersistenceForRuntimeDrop();
-            gameManager.TryUnregisterStolenLootForDrop(removedItem.ItemId, 1);
+            gameManager.TryUnregisterStolenLootForDrop(removedItem.ItemId, ownerPlayerId, 1);
             RefreshAllSlots();
             return true;
         }
@@ -824,7 +835,12 @@ namespace Game.UI
 
             if (cameraTransform == null)
             {
-                FirstPersonCamera firstPersonCamera = FindAnyObjectByType<FirstPersonCamera>();
+                PlayerContextLocator.TryGetLocalFirstPersonCamera(out FirstPersonCamera firstPersonCamera);
+                if (firstPersonCamera == null && PlayerContextLocator.IsCompatibilityFallbackAllowed())
+                {
+                    PlayerContextLocator.TryGetFirstPersonCamera(out firstPersonCamera);
+                }
+
                 if (firstPersonCamera != null)
                 {
                     cameraTransform = firstPersonCamera.transform;
@@ -884,7 +900,7 @@ namespace Game.UI
             }
 
             MinigameManager minigameManager = MinigameManager.Instance;
-            if (minigameManager != null && minigameManager.IsMinigameActive())
+            if (minigameManager != null && minigameManager.IsMinigameActiveForOwner(LocalPlayerId))
             {
                 return false;
             }
@@ -903,23 +919,30 @@ namespace Game.UI
             InventorySystem inventorySystem,
             InventoryItem removedItem,
             int gridX,
-            int gridY)
+            int gridY,
+            string ownerPlayerId)
         {
             if (inventorySystem == null || removedItem == null)
             {
                 return false;
             }
 
-            if (inventorySystem.AddItemAt(removedItem, gridX, gridY))
+            if (inventorySystem.AddItemAt(removedItem, gridX, gridY, ownerPlayerId))
             {
                 return true;
             }
 
-            return inventorySystem.AddItem(removedItem);
+            return inventorySystem.AddItem(removedItem, ownerPlayerId);
         }
 
         private static bool IsMinigameActive()
         {
+            if (PlayerContextLocator.TryGetLocalPresentationMode(out LocalPlayerPresentationMode mode)
+                && mode == LocalPlayerPresentationMode.Minigame)
+            {
+                return true;
+            }
+
             GameManager gameManager = GameManager.Instance;
             return gameManager != null && gameManager.CurrentState == GameState.Minigame;
         }
@@ -989,7 +1012,12 @@ namespace Game.UI
                 return true;
             }
 
-            FirstPersonCamera firstPersonCamera = UnityEngine.Object.FindAnyObjectByType<FirstPersonCamera>();
+            PlayerContextLocator.TryGetLocalFirstPersonCamera(out FirstPersonCamera firstPersonCamera);
+            if (firstPersonCamera == null && PlayerContextLocator.IsCompatibilityFallbackAllowed())
+            {
+                PlayerContextLocator.TryGetFirstPersonCamera(out firstPersonCamera);
+            }
+
             if (firstPersonCamera == null)
             {
                 _lastHeldItemAnchorBindFailureReason = "No active FirstPersonCamera component was found.";
@@ -1017,12 +1045,37 @@ namespace Game.UI
             return true;
         }
 
+        private void RegisterLocalContext()
+        {
+            PlayerContextRegistry.RegisterOrUpdate(this, LocalPlayerId);
+            if (PlayerContextLocator.TryGetLocalContext(out PlayerContext localContext) && localContext != null)
+            {
+                int contextSelectedSlot = Mathf.Max(0, localContext.SelectedQuickSlotIndex);
+                if (contextSelectedSlot != _selectedSlotIndex)
+                {
+                    _selectedSlotIndex = contextSelectedSlot;
+                }
+            }
+
+            SyncSelectedSlotToLocalContext();
+        }
+
         private void EnsureSelectedSlotIsVisible(int unlockedQuickSlots)
         {
             int clamped = Mathf.Clamp(_selectedSlotIndex, 0, Mathf.Max(0, unlockedQuickSlots - 1));
             if (_selectedSlotIndex != clamped)
             {
                 _selectedSlotIndex = clamped;
+            }
+
+            SyncSelectedSlotToLocalContext();
+        }
+
+        private void SyncSelectedSlotToLocalContext()
+        {
+            if (PlayerContextLocator.TryGetLocalContext(out PlayerContext localContext) && localContext != null)
+            {
+                localContext.SetSelectedQuickSlotIndex(_selectedSlotIndex);
             }
         }
 
