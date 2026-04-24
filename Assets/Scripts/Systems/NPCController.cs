@@ -4,7 +4,9 @@ using Game.Core;
 using Game.Core.Events;
 using Game.Inventory;
 using Game.Minigames;
+using Game.Networking;
 using Game.Player;
+using Unity.Netcode;
 using UnityEngine;
 using UnityEngine.AI;
 
@@ -51,6 +53,9 @@ namespace Game.Systems
         [SerializeField] private int lineOfSightMask = int.MaxValue;
         [SerializeField] private QueryTriggerInteraction lineOfSightTriggerInteraction = QueryTriggerInteraction.Ignore;
         [SerializeField] private float fallbackEyeHeight = 1.5f;
+        [SerializeField] private float targetLockDurationSeconds = 1.25f;
+        [SerializeField] private float retargetCooldownSeconds = 0.3f;
+        [SerializeField] private float targetBreakDistanceMultiplier = 1.75f;
 
         [Header("Suspicion")]
         [SerializeField] private float suspicionLevel;
@@ -65,6 +70,7 @@ namespace Game.Systems
 
         [Header("Post Minigame")]
         [SerializeField] private float postLieMinigameGraceDuration = 2f;
+        [SerializeField] private float networkLieResultTimeoutSeconds = 20f;
 
         [Header("Post Lie Fail Sequence")]
         [SerializeField] private float postLieFailAlertDuration = 1.5f;
@@ -142,7 +148,18 @@ namespace Game.Systems
         private bool hasCaughtPlayer;
         private bool triggeredMinigame;
         private string _activeLieMinigameOwnerPlayerId = PlayerContextRegistry.DefaultLocalPlayerId;
+        private ulong _activeTargetClientId = NetworkNpcAuthorityBridge.NoTargetClientId;
+        private ulong _lockedTargetClientId = NetworkNpcAuthorityBridge.NoTargetClientId;
+        private float _targetLockUntilTime;
+        private float _retargetCooldownUntilTime;
+        private ulong _lastIssuedCatchToken;
+        private string _lastCatchOwnerKey = PlayerContextRegistry.DefaultLocalPlayerId;
+        private float _lastCatchServerTime;
         private bool _isCrossingLink = false;
+        private int _ownerCatchStateDay = -1;
+
+        private readonly Dictionary<string, NpcCatchStateRuntime> _ownerCatchStates =
+            new Dictionary<string, NpcCatchStateRuntime>(System.StringComparer.Ordinal);
 
         private const int RoamTargetAttempts = 12;
         private const float FreezeProbeDistanceTolerance = 0.05f;
@@ -150,6 +167,33 @@ namespace Game.Systems
         private const float MaxRoamSampleDistance = 1.25f;
         private const float DestinationRefreshThreshold = 0.1f;
         private const float AgentNavPositionSampleRadius = 0.6f;
+
+        public NPCState CurrentNpcState => _state;
+        public ulong CurrentTargetClientId => _activeTargetClientId;
+        public ulong CurrentCatchToken => _lastIssuedCatchToken;
+        public float CurrentLastCatchServerTime => _lastCatchServerTime;
+        public string CurrentLastCatchOwnerKey => _lastCatchOwnerKey;
+        public bool IsCaughtOrCooldownActive =>
+            hasCaughtPlayer
+            || _awaitingMinigameEnd
+            || _isPostLieFailAlertActive
+            || _isPostLieFailChaseActive
+            || IsInPostLieMinigameGracePeriod()
+            || HasServerCatchCooldownForCurrentTarget();
+
+        private sealed class NpcCatchStateRuntime
+        {
+            public string ownerKey;
+            public ulong targetClientId;
+            public float suspicion01;
+            public bool isChaseActive;
+            public bool isCaught;
+            public float cooldownUntilTime;
+            public int catchCountThisDay;
+            public bool pendingLie;
+            public ulong catchToken;
+            public float lastCatchServerTime;
+        }
 
         private void Reset()
         {
@@ -205,6 +249,23 @@ namespace Game.Systems
 
         private void Update()
         {
+            if (!CanRunAuthoritativeUpdate())
+            {
+                StopAgent();
+                return;
+            }
+
+            if (IsAuthoritativeNetworkServer())
+            {
+                EnsureOwnerCatchStateDayIsCurrent();
+                ResolveServerTargetPlayer();
+                TryResolveTimedOutPendingLieCatch();
+            }
+            else
+            {
+                _activeTargetClientId = NetworkNpcAuthorityBridge.NoTargetClientId;
+            }
+
             TryAutoAssignReferences();
 
             if (_postLieMinigameGraceTimer > 0f)
@@ -328,6 +389,25 @@ namespace Game.Systems
             float decayRate = Mathf.Max(0f, suspicionDecayPerSecond);
             float threshold = Mathf.Clamp01(suspicionChaseThreshold);
 
+            string ownerKeyForSuspicion = ResolveCurrentTargetOwnerKey();
+            NpcCatchStateRuntime trackedState = GetOrCreateOwnerCatchState(ownerKeyForSuspicion, _activeTargetClientId);
+            if (trackedState != null)
+            {
+                if (isRawDetected && !isInNonRestrictedZone)
+                {
+                    trackedState.suspicion01 += increaseRate * Time.deltaTime;
+                }
+                else
+                {
+                    trackedState.suspicion01 -= decayRate * Time.deltaTime;
+                }
+
+                trackedState.suspicion01 = Mathf.Clamp01(trackedState.suspicion01);
+                trackedState.isChaseActive = isRawDetected && !isInNonRestrictedZone && trackedState.suspicion01 >= threshold;
+                suspicionLevel = trackedState.suspicion01;
+                return trackedState.isChaseActive;
+            }
+
             if (isRawDetected && !isInNonRestrictedZone)
             {
                 suspicionLevel += increaseRate * Time.deltaTime;
@@ -405,7 +485,7 @@ namespace Game.Systems
                         }
 
                         Log("Player caught.");
-                        TriggerLieMinigame();
+                        HandleAuthoritativeCatch();
                         return;
                     }
                 }
@@ -637,8 +717,51 @@ namespace Game.Systems
                 }
 
                 Log("Player caught.");
-                TriggerLieMinigame();
+                HandleAuthoritativeCatch();
             }
+        }
+
+        private void HandleAuthoritativeCatch()
+        {
+            if (IsAuthoritativeNetworkServer())
+            {
+                string ownerKey = ResolveCurrentTargetOwnerKey();
+                NpcCatchStateRuntime ownerState = GetOrCreateOwnerCatchState(ownerKey, _activeTargetClientId);
+                if (ownerState == null)
+                {
+                    return;
+                }
+
+                float now = Time.time;
+                if (ownerState.isCaught || ownerState.cooldownUntilTime > now)
+                {
+                    return;
+                }
+
+                ownerState.isCaught = true;
+                ownerState.pendingLie = true;
+                ownerState.catchToken++;
+                ownerState.lastCatchServerTime = now;
+                ownerState.catchCountThisDay = Mathf.Max(0, ownerState.catchCountThisDay) + 1;
+                ownerState.targetClientId = _activeTargetClientId;
+                hasCaughtPlayer = true;
+                _awaitingMinigameEnd = true;
+                triggeredMinigame = false;
+                _lastIssuedCatchToken = ownerState.catchToken;
+                _lastCatchOwnerKey = ownerState.ownerKey;
+                _lastCatchServerTime = now;
+
+                NetworkSessionProgressAuthority.TryRegisterNpcCatch(
+                    ownerState.targetClientId,
+                    ownerState.ownerKey,
+                    ownerState.catchToken,
+                    ResolveNpcNetworkObjectId(),
+                    ownerState.lastCatchServerTime,
+                    ownerState.pendingLie);
+                return;
+            }
+
+            TriggerLieMinigame();
         }
 
         private void TriggerLieMinigame()
@@ -1115,7 +1238,7 @@ namespace Game.Systems
             gameManager.ModifyCurrency(-postLieFailCatchCurrencyPenalty);
         }
 
-        private void ApplyLieFailStolenLootConfiscation()
+        private void ApplyLieFailStolenLootConfiscation(string ownerOverride = null)
         {
             GameManager gameManager = GameManager.Instance;
             if (gameManager == null)
@@ -1123,7 +1246,14 @@ namespace Game.Systems
                 return;
             }
 
-            string ownerPlayerId = PlayerInventoryAuthority.GetLocalOwnerPlayerId();
+            if (IsNonAuthoritativeNetworkClient())
+            {
+                return;
+            }
+
+            string ownerPlayerId = string.IsNullOrWhiteSpace(ownerOverride)
+                ? ResolveCaughtPlayerOwnerKey()
+                : ownerOverride.Trim();
             List<StolenLootEntryData> stolenLootToConfiscate = gameManager.ConsumeDayStolenLoot(ownerPlayerId);
             if (stolenLootToConfiscate == null || stolenLootToConfiscate.Count <= 0)
             {
@@ -1136,7 +1266,17 @@ namespace Game.Systems
                 return;
             }
 
-            List<InventoryItem> inventorySnapshot = inventorySystem.GetAllItems();
+            bool shouldMutateServerInventory = true;
+            NetworkManager networkManager = NetworkManager.Singleton;
+            if (networkManager != null
+                && networkManager.IsListening
+                && networkManager.IsServer
+                && NetworkOwnerKeyUtility.IsNetworkOwnerKey(ownerPlayerId))
+            {
+                string localOwnerKey = NetworkOwnerKeyUtility.GetOwnerKeyForSender(networkManager.LocalClientId);
+                shouldMutateServerInventory = string.Equals(ownerPlayerId, localOwnerKey, System.StringComparison.Ordinal);
+            }
+
             for (int i = 0; i < stolenLootToConfiscate.Count; i++)
             {
                 StolenLootEntryData stolenEntry = stolenLootToConfiscate[i];
@@ -1154,20 +1294,394 @@ namespace Game.Systems
                     continue;
                 }
 
-                for (int j = 0; j < inventorySnapshot.Count && remainingToConfiscate > 0; j++)
+                if (shouldMutateServerInventory)
                 {
-                    InventoryItem item = inventorySnapshot[j];
-                    if (item == null || !string.Equals(item.ItemId, targetItemId, System.StringComparison.Ordinal))
-                    {
-                        continue;
-                    }
-
-                    if (inventorySystem.RemoveItem(item))
-                    {
-                        inventorySnapshot[j] = null;
-                        remainingToConfiscate--;
-                    }
+                    inventorySystem.RemoveItemsByItemId(targetItemId, remainingToConfiscate, ownerPlayerId);
                 }
+            }
+
+            if (networkManager != null && networkManager.IsListening && networkManager.IsServer && player != null)
+            {
+                NetworkObject playerNetworkObject = player.GetComponent<NetworkObject>();
+                if (playerNetworkObject != null && playerNetworkObject.IsSpawned)
+                {
+                    NetworkSessionProgressAuthority.TrySyncStolenLootSnapshotToClient(playerNetworkObject.OwnerClientId, ownerPlayerId);
+                }
+            }
+        }
+
+        private string ResolveCaughtPlayerOwnerKey()
+        {
+            NetworkManager networkManager = NetworkManager.Singleton;
+            if (networkManager != null && networkManager.IsListening && networkManager.IsServer && player != null)
+            {
+                NetworkObject playerNetworkObject = player.GetComponent<NetworkObject>();
+                if (playerNetworkObject != null && playerNetworkObject.IsSpawned)
+                {
+                    return NetworkOwnerKeyUtility.GetOwnerKeyForSender(playerNetworkObject.OwnerClientId);
+                }
+            }
+
+            return PlayerInventoryAuthority.GetLocalOwnerPlayerId();
+        }
+
+        private string ResolveCurrentTargetOwnerKey()
+        {
+            NetworkManager networkManager = NetworkManager.Singleton;
+            if (networkManager != null
+                && networkManager.IsListening
+                && networkManager.IsServer
+                && _activeTargetClientId != NetworkNpcAuthorityBridge.NoTargetClientId)
+            {
+                return NetworkOwnerKeyUtility.GetOwnerKeyForSender(_activeTargetClientId);
+            }
+
+            return PlayerInventoryAuthority.GetLocalOwnerPlayerId();
+        }
+
+        public MinigameData BuildNetworkLieMinigameData()
+        {
+            return BuildLieMinigameData();
+        }
+
+        public void HandleAuthoritativeClientDisconnect(ulong disconnectedClientId)
+        {
+            if (!IsAuthoritativeNetworkServer() || disconnectedClientId == NetworkNpcAuthorityBridge.NoTargetClientId)
+            {
+                return;
+            }
+
+            string ownerKey = NetworkOwnerKeyUtility.GetOwnerKeyForSender(disconnectedClientId);
+            if (_ownerCatchStates.TryGetValue(ownerKey, out NpcCatchStateRuntime ownerState) && ownerState != null)
+            {
+                ownerState.targetClientId = NetworkNpcAuthorityBridge.NoTargetClientId;
+
+                if (ownerState.pendingLie || ownerState.isCaught)
+                {
+                    ResolveAuthoritativeLieOutcome(ownerState, MinigameResult.Timeout, out _);
+                }
+            }
+
+            if (_activeTargetClientId == disconnectedClientId || _lockedTargetClientId == disconnectedClientId)
+            {
+                _activeTargetClientId = NetworkNpcAuthorityBridge.NoTargetClientId;
+                _lockedTargetClientId = NetworkNpcAuthorityBridge.NoTargetClientId;
+                _targetLockUntilTime = 0f;
+                _retargetCooldownUntilTime = 0f;
+                player = null;
+            }
+        }
+
+        public bool TryResolveAuthoritativeLieResult(
+            ulong senderClientId,
+            ulong catchToken,
+            MinigameResult result,
+            out bool appliedConsequence,
+            out string reason)
+        {
+            appliedConsequence = false;
+            reason = string.Empty;
+
+            if (!IsAuthoritativeNetworkServer())
+            {
+                reason = "NPC authority unavailable.";
+                return false;
+            }
+
+            if (catchToken == 0UL)
+            {
+                reason = "Invalid catch token.";
+                return false;
+            }
+
+            string ownerKey = NetworkOwnerKeyUtility.GetOwnerKeyForSender(senderClientId);
+            if (!_ownerCatchStates.TryGetValue(ownerKey, out NpcCatchStateRuntime ownerState) || ownerState == null)
+            {
+                reason = "No pending catch state.";
+                return false;
+            }
+
+            if (!ownerState.pendingLie)
+            {
+                reason = "Catch already resolved.";
+                return false;
+            }
+
+            if (ownerState.catchToken != catchToken)
+            {
+                reason = "Catch token mismatch.";
+                return false;
+            }
+
+            if (ownerState.targetClientId != senderClientId)
+            {
+                reason = "Sender does not own this catch.";
+                return false;
+            }
+
+            ResolveAuthoritativeLieOutcome(ownerState, result, out appliedConsequence);
+            return true;
+        }
+
+        private void ResolveAuthoritativeLieOutcome(
+            NpcCatchStateRuntime ownerState,
+            MinigameResult result,
+            out bool appliedConsequence)
+        {
+            appliedConsequence = false;
+            if (ownerState == null)
+            {
+                return;
+            }
+
+            bool shouldApplyPenalty = result == MinigameResult.Fail
+                                      || result == MinigameResult.Timeout
+                                      || result == MinigameResult.Cancelled;
+            if (shouldApplyPenalty)
+            {
+                ApplyLieFailStolenLootConfiscation(ownerState.ownerKey);
+                ApplyLieFailImmediateFine();
+
+                GameManager gameManager = GameManager.Instance;
+                if (gameManager != null)
+                {
+                    gameManager.RegisterFailedLieEscalation();
+                }
+
+                appliedConsequence = true;
+            }
+
+            ownerState.pendingLie = false;
+            ownerState.isCaught = false;
+            ownerState.lastCatchServerTime = Time.time;
+            ownerState.cooldownUntilTime = Time.time + Mathf.Max(0.05f, postLieMinigameGraceDuration);
+            hasCaughtPlayer = false;
+            _awaitingMinigameEnd = false;
+            triggeredMinigame = false;
+            _activeLieMinigameOwnerPlayerId = PlayerContextRegistry.DefaultLocalPlayerId;
+            ResetAfterMinigame();
+        }
+
+        private void TryResolveTimedOutPendingLieCatch()
+        {
+            if (!_awaitingMinigameEnd || string.IsNullOrWhiteSpace(_lastCatchOwnerKey))
+            {
+                return;
+            }
+
+            if (!_ownerCatchStates.TryGetValue(_lastCatchOwnerKey, out NpcCatchStateRuntime ownerState)
+                || ownerState == null
+                || !ownerState.pendingLie)
+            {
+                hasCaughtPlayer = false;
+                _awaitingMinigameEnd = false;
+                return;
+            }
+
+            bool targetConnected = false;
+            NetworkManager networkManager = NetworkManager.Singleton;
+            if (networkManager != null
+                && networkManager.IsListening
+                && networkManager.IsServer)
+            {
+                targetConnected = networkManager.ConnectedClients.ContainsKey(ownerState.targetClientId);
+            }
+
+            float timeoutSeconds = Mathf.Max(2f, networkLieResultTimeoutSeconds);
+            bool isTimedOut = Time.time - ownerState.lastCatchServerTime >= timeoutSeconds;
+            if (targetConnected && !isTimedOut)
+            {
+                return;
+            }
+
+            ResolveAuthoritativeLieOutcome(ownerState, MinigameResult.Timeout, out _);
+        }
+
+        private ulong ResolveNpcNetworkObjectId()
+        {
+            NetworkObject networkObject = GetComponent<NetworkObject>();
+            return networkObject != null && networkObject.IsSpawned ? networkObject.NetworkObjectId : 0UL;
+        }
+
+        private bool TryGetConnectedPlayerTransform(ulong clientId, out Transform playerTransform)
+        {
+            playerTransform = null;
+            NetworkManager networkManager = NetworkManager.Singleton;
+            if (networkManager == null
+                || !networkManager.IsListening
+                || !networkManager.IsServer
+                || !networkManager.ConnectedClients.TryGetValue(clientId, out NetworkClient candidateClient)
+                || candidateClient == null
+                || candidateClient.PlayerObject == null
+                || !candidateClient.PlayerObject.IsSpawned)
+            {
+                return false;
+            }
+
+            Transform candidateTransform = candidateClient.PlayerObject.transform;
+            if (candidateTransform == null || !candidateTransform.gameObject.activeInHierarchy)
+            {
+                return false;
+            }
+
+            playerTransform = candidateTransform;
+            return true;
+        }
+
+        private void EnsureOwnerCatchStateDayIsCurrent()
+        {
+            GameManager gameManager = GameManager.Instance;
+            int day = gameManager != null ? gameManager.GetCurrentDay() : 1;
+            if (day == _ownerCatchStateDay)
+            {
+                return;
+            }
+
+            _ownerCatchStateDay = day;
+            _ownerCatchStates.Clear();
+            _lastIssuedCatchToken = 0;
+            _lastCatchOwnerKey = PlayerContextRegistry.DefaultLocalPlayerId;
+            _lastCatchServerTime = 0f;
+        }
+
+        private NpcCatchStateRuntime GetOrCreateOwnerCatchState(string ownerKey, ulong targetClientId)
+        {
+            string normalizedOwnerKey = string.IsNullOrWhiteSpace(ownerKey)
+                ? PlayerContextRegistry.DefaultLocalPlayerId
+                : ownerKey.Trim();
+
+            if (!_ownerCatchStates.TryGetValue(normalizedOwnerKey, out NpcCatchStateRuntime state) || state == null)
+            {
+                state = new NpcCatchStateRuntime
+                {
+                    ownerKey = normalizedOwnerKey,
+                    targetClientId = targetClientId,
+                    suspicion01 = 0f,
+                    isChaseActive = false,
+                    isCaught = false,
+                    cooldownUntilTime = 0f,
+                    catchCountThisDay = 0,
+                    pendingLie = false,
+                    catchToken = 0,
+                    lastCatchServerTime = 0f
+                };
+                _ownerCatchStates[normalizedOwnerKey] = state;
+            }
+            else if (targetClientId != NetworkNpcAuthorityBridge.NoTargetClientId)
+            {
+                state.targetClientId = targetClientId;
+            }
+
+            return state;
+        }
+
+        private bool HasServerCatchCooldownForCurrentTarget()
+        {
+            if (!IsAuthoritativeNetworkServer())
+            {
+                return false;
+            }
+
+            string ownerKey = ResolveCurrentTargetOwnerKey();
+            if (!_ownerCatchStates.TryGetValue(ownerKey, out NpcCatchStateRuntime state) || state == null)
+            {
+                return false;
+            }
+
+            return state.cooldownUntilTime > Time.time || state.isCaught;
+        }
+
+        private static bool IsNonAuthoritativeNetworkClient()
+        {
+            NetworkManager manager = NetworkManager.Singleton;
+            return manager != null && manager.IsListening && manager.IsClient && !manager.IsServer;
+        }
+
+        private static bool IsAuthoritativeNetworkServer()
+        {
+            NetworkManager manager = NetworkManager.Singleton;
+            return manager != null && manager.IsListening && manager.IsServer;
+        }
+
+        private static bool CanRunAuthoritativeUpdate()
+        {
+            NetworkManager manager = NetworkManager.Singleton;
+            if (manager == null || !manager.IsListening)
+            {
+                return true;
+            }
+
+            return manager.IsServer;
+        }
+
+        private void ResolveServerTargetPlayer()
+        {
+            NetworkManager networkManager = NetworkManager.Singleton;
+            if (networkManager == null || !networkManager.IsListening || !networkManager.IsServer)
+            {
+                return;
+            }
+
+            if (_lockedTargetClientId != NetworkNpcAuthorityBridge.NoTargetClientId
+                && TryGetConnectedPlayerTransform(_lockedTargetClientId, out Transform lockedTransform)
+                && lockedTransform != null)
+            {
+                float breakDistance = Mathf.Max(catchDistance, detectionDistance) * Mathf.Max(1f, targetBreakDistanceMultiplier);
+                float distanceToLockedTarget = Vector3.Distance(transform.position, lockedTransform.position);
+                bool keepLockedTarget = Time.time < _targetLockUntilTime || distanceToLockedTarget <= breakDistance;
+                if (keepLockedTarget)
+                {
+                    player = lockedTransform;
+                    _activeTargetClientId = _lockedTargetClientId;
+                    return;
+                }
+            }
+
+            if (Time.time < _retargetCooldownUntilTime
+                && _activeTargetClientId != NetworkNpcAuthorityBridge.NoTargetClientId
+                && TryGetConnectedPlayerTransform(_activeTargetClientId, out Transform cooldownTransform)
+                && cooldownTransform != null)
+            {
+                player = cooldownTransform;
+                return;
+            }
+
+            Transform bestTransform = null;
+            ulong bestClientId = NetworkNpcAuthorityBridge.NoTargetClientId;
+            float bestDistanceSqr = float.MaxValue;
+
+            foreach (KeyValuePair<ulong, NetworkClient> entry in networkManager.ConnectedClients)
+            {
+                ulong candidateClientId = entry.Key;
+                if (!TryGetConnectedPlayerTransform(candidateClientId, out Transform candidateTransform) || candidateTransform == null)
+                {
+                    continue;
+                }
+
+                float distanceSqr = (candidateTransform.position - transform.position).sqrMagnitude;
+                bool isTie = Mathf.Abs(distanceSqr - bestDistanceSqr) <= 0.0001f;
+                if (distanceSqr > bestDistanceSqr && !isTie)
+                {
+                    continue;
+                }
+
+                if (isTie && bestClientId != NetworkNpcAuthorityBridge.NoTargetClientId && candidateClientId > bestClientId)
+                {
+                    continue;
+                }
+
+                bestDistanceSqr = distanceSqr;
+                bestTransform = candidateTransform;
+                bestClientId = candidateClientId;
+            }
+
+            player = bestTransform;
+            _activeTargetClientId = bestTransform != null ? bestClientId : NetworkNpcAuthorityBridge.NoTargetClientId;
+            if (_activeTargetClientId != _lockedTargetClientId)
+            {
+                _lockedTargetClientId = _activeTargetClientId;
+                _targetLockUntilTime = Time.time + Mathf.Max(0f, targetLockDurationSeconds);
+                _retargetCooldownUntilTime = Time.time + Mathf.Max(0f, retargetCooldownSeconds);
             }
         }
 
@@ -1268,6 +1782,16 @@ namespace Game.Systems
 
             NPCState previous = _state;
             _state = nextState;
+
+            if (previous == NPCState.Chasing || _state == NPCState.Chasing)
+            {
+                string ownerKey = ResolveCurrentTargetOwnerKey();
+                NpcCatchStateRuntime ownerState = GetOrCreateOwnerCatchState(ownerKey, _activeTargetClientId);
+                if (ownerState != null)
+                {
+                    ownerState.isChaseActive = _state == NPCState.Chasing;
+                }
+            }
 
             if (_state == NPCState.Idle)
             {

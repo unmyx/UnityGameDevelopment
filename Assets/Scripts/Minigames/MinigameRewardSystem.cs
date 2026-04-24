@@ -1,6 +1,8 @@
 using System.Collections.Generic;
 using Game.Core;
 using Game.Core.Events;
+using Game.Networking;
+using Unity.Netcode;
 
 namespace Game.Minigames
 {
@@ -9,6 +11,9 @@ namespace Game.Minigames
     /// </summary>
     public static class MinigameRewardSystem
     {
+        private const string CleaningMinigameId = "cleaning";
+        private const string WeldingMinigameId = "welding";
+
         private static readonly Dictionary<string, int> PassRewardByMinigameId = new()
         {
             { "welding", 50 },
@@ -46,6 +51,28 @@ namespace Game.Minigames
                 return;
             }
 
+            string normalizedId = NormalizeMinigameId(minigameId);
+
+            NetworkManager manager = NetworkManager.Singleton;
+            bool isNetworkSession = manager != null && manager.IsListening;
+            bool isNonAuthoritativeClient = isNetworkSession && manager.IsClient && !manager.IsServer;
+            if (isNonAuthoritativeClient
+                && (string.Equals(normalizedId, CleaningMinigameId, System.StringComparison.Ordinal)
+                    || string.Equals(normalizedId, WeldingMinigameId, System.StringComparison.Ordinal)))
+            {
+                // MP-21/MP-22: Cleaning/Welding rewards resolve only through authoritative session resolution.
+                return;
+            }
+
+            if (isNonAuthoritativeClient)
+            {
+                if (NetworkSessionProgressAuthority.TryGetLocalRequester(out NetworkSessionProgressAuthority authority))
+                {
+                    authority.RequestMinigameRewardClaim(result, minigameId, ownerPlayerId, sessionToken, dedupeLifecycleScope);
+                }
+                return;
+            }
+
             string dedupeKey = BuildRewardDedupeKey(sessionToken, dedupeLifecycleScope);
             if (dedupeKey == null || !RewardedSessionKeys.Add(dedupeKey))
             {
@@ -58,7 +85,6 @@ namespace Game.Minigames
                 return;
             }
 
-            string normalizedId = NormalizeMinigameId(minigameId);
             bool isRewardEligible = gameManager.TryConsumeDailyTaskRewardEligibility(normalizedId);
 
             int rewardCurrency = 0;
@@ -74,6 +100,7 @@ namespace Game.Minigames
 
             RewardGrantedData rewardEventData = new RewardGrantedData
             {
+                rewardGrantId = BuildRewardGrantId(dedupeKey, normalizedId, ownerPlayerId),
                 minigameId = minigameId,
                 ownerPlayerId = string.IsNullOrWhiteSpace(ownerPlayerId) ? "local_player_0" : ownerPlayerId.Trim(),
                 result = result,
@@ -90,6 +117,24 @@ namespace Game.Minigames
             }
 
             EventBus.Publish(new MinigameRewardGrantedEvent(rewardEventData));
+        }
+
+        public static void DistributeNetworkCleaningSessionReward(
+            MinigameResult result,
+            string ownerPlayerId,
+            int sessionToken,
+            int dedupeLifecycleScope)
+        {
+            DistributeRewards(result, CleaningMinigameId, ownerPlayerId, sessionToken, dedupeLifecycleScope);
+        }
+
+        public static void DistributeNetworkWeldingSessionReward(
+            MinigameResult result,
+            string ownerPlayerId,
+            int sessionToken,
+            int dedupeLifecycleScope)
+        {
+            DistributeRewards(result, WeldingMinigameId, ownerPlayerId, sessionToken, dedupeLifecycleScope);
         }
 
         private static string NormalizeMinigameId(string minigameId)
@@ -112,6 +157,22 @@ namespace Game.Minigames
             // Legacy callers that do not pass a scope keep prior token-only semantics.
             return $"legacy:{sessionToken}";
         }
+
+        private static string BuildRewardGrantId(string dedupeKey, string minigameId, string ownerPlayerId)
+        {
+            if (string.IsNullOrEmpty(dedupeKey))
+            {
+                return string.Empty;
+            }
+
+            string normalizedOwner = string.IsNullOrWhiteSpace(ownerPlayerId)
+                ? "local_player_0"
+                : ownerPlayerId.Trim();
+            string normalizedMinigame = string.IsNullOrWhiteSpace(minigameId)
+                ? string.Empty
+                : minigameId.Trim().ToLowerInvariant();
+            return $"{dedupeKey}:{normalizedMinigame}:{normalizedOwner}";
+        }
     }
 
     /// <summary>
@@ -119,6 +180,7 @@ namespace Game.Minigames
     /// </summary>
     public class RewardGrantedData
     {
+        public string rewardGrantId;
         public string minigameId;
         public string ownerPlayerId;
         public MinigameResult result;
@@ -127,7 +189,7 @@ namespace Game.Minigames
 
         public override string ToString()
         {
-            return $"[Reward] {minigameId}: {result} | Currency: +{currencyAwarded} | Items: {itemsAwarded}";
+            return $"[Reward:{rewardGrantId}] {minigameId}: {result} | Currency: +{currencyAwarded} | Items: {itemsAwarded}";
         }
     }
 }

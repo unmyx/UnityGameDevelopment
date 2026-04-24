@@ -2,6 +2,7 @@ using Unity.Netcode;
 using Unity.Netcode.Transports.UTP;
 using UnityEngine;
 using UnityEngine.SceneManagement;
+using System.Reflection;
 
 namespace Game.Networking
 {
@@ -12,6 +13,7 @@ namespace Game.Networking
     public class NetworkSessionBootstrap : MonoBehaviour
     {
         private const string SandboxSceneName = "NetworkSandbox";
+        private const string InitialNetworkSceneName = "HomeScene";
         private static NetworkSessionBootstrap _instance;
 
         [Header("Sandbox Networking")]
@@ -19,11 +21,14 @@ namespace Game.Networking
         [SerializeField] private ushort _port = 7777;
         [SerializeField] private bool _showDebugOverlay = true;
         [SerializeField] private bool _autoStartFromRuntimeMode = true;
+        [SerializeField] private int _relayMaxPeers = 3;
+        [SerializeField] private string _relayConnectionType = "dtls";
 
         [SerializeField] private NetworkManager _networkManager;
         [SerializeField] private UnityTransport _transport;
         private string _addressField = "127.0.0.1";
         private bool _autoStartAttempted;
+        private bool _startupInProgress;
 
         [RuntimeInitializeOnLoadMethod(RuntimeInitializeLoadType.AfterSceneLoad)]
         private static void EnsureBootstrapInSandboxScene()
@@ -58,17 +63,19 @@ namespace Game.Networking
             }
 
             _instance = this;
+            ApplyRuntimeConnectionOverrides();
             _addressField = string.IsNullOrWhiteSpace(_address) ? "127.0.0.1" : _address.Trim();
             EnsureNetworkManagerSetup();
         }
 
         private void Update()
         {
-            if (!_autoStartFromRuntimeMode || _autoStartAttempted || _networkManager == null || _networkManager.IsListening)
+            if (!_autoStartFromRuntimeMode || _autoStartAttempted || _networkManager == null || _networkManager.IsListening || _startupInProgress)
             {
                 return;
             }
 
+            ApplyRuntimeConnectionOverrides();
             _autoStartAttempted = true;
             switch (NetworkModeRuntime.StartupMode)
             {
@@ -77,6 +84,12 @@ namespace Game.Networking
                     break;
                 case NetworkStartupMode.Client:
                     StartClient();
+                    break;
+                case NetworkStartupMode.RelayHost:
+                    _ = StartRelayHostAsync();
+                    break;
+                case NetworkStartupMode.RelayClient:
+                    _ = StartRelayClientAsync();
                     break;
             }
         }
@@ -108,7 +121,7 @@ namespace Game.Networking
             GUILayout.Label($"Port: {_port}");
             GUILayout.Space(8);
 
-            GUI.enabled = _networkManager != null && !_networkManager.IsListening;
+            GUI.enabled = _networkManager != null && !_networkManager.IsListening && !_startupInProgress;
             if (GUILayout.Button("Start Host"))
             {
                 StartHost();
@@ -119,6 +132,16 @@ namespace Game.Networking
                 StartClient();
             }
 
+            if (GUILayout.Button("Start Relay Host"))
+            {
+                _ = StartRelayHostAsync();
+            }
+
+            if (GUILayout.Button("Start Relay Client"))
+            {
+                _ = StartRelayClientAsync();
+            }
+
             GUI.enabled = _networkManager != null && _networkManager.IsListening;
             if (GUILayout.Button("Shutdown Session"))
             {
@@ -126,6 +149,11 @@ namespace Game.Networking
             }
 
             GUI.enabled = true;
+            if (!string.IsNullOrWhiteSpace(NetworkModeRuntime.RelayJoinCode))
+            {
+                GUILayout.Space(6);
+                GUILayout.Label($"Relay Join Code: {NetworkModeRuntime.RelayJoinCode}");
+            }
             GUILayout.EndArea();
         }
 
@@ -145,7 +173,12 @@ namespace Game.Networking
             {
                 Debug.LogError("[NetworkSessionBootstrap] Failed to start host.");
                 NetworkModeRuntime.StartupMode = NetworkStartupMode.Offline;
+                NetworkModeRuntime.LastStartupMessage = "Failed to start host.";
+                return;
             }
+
+            NetworkModeRuntime.LastStartupMessage = "Host started.";
+            TryEnterInitialNetworkScene(InitialNetworkSceneName);
         }
 
         private void StartClient()
@@ -164,6 +197,102 @@ namespace Game.Networking
             {
                 Debug.LogError("[NetworkSessionBootstrap] Failed to start client.");
                 NetworkModeRuntime.StartupMode = NetworkStartupMode.Offline;
+                NetworkModeRuntime.LastStartupMessage = "Failed to start client.";
+                return;
+            }
+
+            NetworkModeRuntime.LastStartupMessage = "Client started.";
+        }
+
+        private async System.Threading.Tasks.Task StartRelayHostAsync()
+        {
+            if (_networkManager == null || _networkManager.IsListening || _startupInProgress)
+            {
+                return;
+            }
+
+            _startupInProgress = true;
+            try
+            {
+                NetworkRelayService.RelayHostStartResult relay = await NetworkRelayService.PrepareHostAsync(_relayMaxPeers, _relayConnectionType);
+                if (!relay.Success || relay.RelayServerData == null)
+                {
+                    NetworkModeRuntime.StartupMode = NetworkStartupMode.Offline;
+                    NetworkModeRuntime.LastStartupMessage = string.IsNullOrWhiteSpace(relay.Error)
+                        ? "Failed to prepare Relay host."
+                        : relay.Error;
+                    return;
+                }
+
+                if (!ConfigureRelayTransport(relay.RelayServerData))
+                {
+                    NetworkModeRuntime.StartupMode = NetworkStartupMode.Offline;
+                    NetworkModeRuntime.LastStartupMessage = "Relay transport setup failed.";
+                    return;
+                }
+
+                NetworkModeRuntime.StartupMode = NetworkStartupMode.RelayHost;
+                NetworkModeRuntime.RelayJoinCode = relay.JoinCode ?? string.Empty;
+                NetworkModeRuntime.LastStartupMessage = string.IsNullOrWhiteSpace(NetworkModeRuntime.RelayJoinCode)
+                    ? "Relay host started."
+                    : $"Relay Host Join Code: {NetworkModeRuntime.RelayJoinCode}";
+
+                if (!_networkManager.StartHost())
+                {
+                    NetworkModeRuntime.StartupMode = NetworkStartupMode.Offline;
+                    NetworkModeRuntime.LastStartupMessage = "Failed to start Relay host.";
+                    return;
+                }
+
+                TryEnterInitialNetworkScene(InitialNetworkSceneName);
+            }
+            finally
+            {
+                _startupInProgress = false;
+            }
+        }
+
+        private async System.Threading.Tasks.Task StartRelayClientAsync()
+        {
+            if (_networkManager == null || _networkManager.IsListening || _startupInProgress)
+            {
+                return;
+            }
+
+            _startupInProgress = true;
+            try
+            {
+                NetworkRelayService.RelayClientJoinResult relay = await NetworkRelayService.PrepareClientAsync(NetworkModeRuntime.RelayJoinCode, _relayConnectionType);
+                if (!relay.Success || relay.RelayServerData == null)
+                {
+                    NetworkModeRuntime.StartupMode = NetworkStartupMode.Offline;
+                    NetworkModeRuntime.LastStartupMessage = string.IsNullOrWhiteSpace(relay.Error)
+                        ? "Failed to join Relay."
+                        : relay.Error;
+                    return;
+                }
+
+                if (!ConfigureRelayTransport(relay.RelayServerData))
+                {
+                    NetworkModeRuntime.StartupMode = NetworkStartupMode.Offline;
+                    NetworkModeRuntime.LastStartupMessage = "Relay transport setup failed.";
+                    return;
+                }
+
+                NetworkModeRuntime.StartupMode = NetworkStartupMode.RelayClient;
+                NetworkModeRuntime.LastStartupMessage = "Relay client starting...";
+                if (!_networkManager.StartClient())
+                {
+                    NetworkModeRuntime.StartupMode = NetworkStartupMode.Offline;
+                    NetworkModeRuntime.LastStartupMessage = "Failed to start Relay client.";
+                    return;
+                }
+
+                NetworkModeRuntime.LastStartupMessage = "Relay client started.";
+            }
+            finally
+            {
+                _startupInProgress = false;
             }
         }
 
@@ -174,8 +303,10 @@ namespace Game.Networking
                 return;
             }
 
+            NetworkSessionLifecycleCoordinator.MarkLocalShutdownIntent();
             _networkManager.Shutdown();
             NetworkModeRuntime.StartupMode = NetworkStartupMode.Offline;
+            NetworkModeRuntime.RelayJoinCode = string.Empty;
         }
 
         private void EnsureNetworkManagerSetup()
@@ -224,7 +355,7 @@ namespace Game.Networking
                 return;
             }
 
-            _networkManager.NetworkConfig.EnableSceneManagement = false;
+            _networkManager.NetworkConfig.EnableSceneManagement = true;
             ConfigureTransportAddress();
         }
 
@@ -237,6 +368,77 @@ namespace Game.Networking
 
             _address = string.IsNullOrWhiteSpace(_addressField) ? "127.0.0.1" : _addressField.Trim();
             _transport.SetConnectionData(_address, _port, "0.0.0.0");
+        }
+
+        private void ApplyRuntimeConnectionOverrides()
+        {
+            if (NetworkModeRuntime.StartupMode == NetworkStartupMode.Offline)
+            {
+                return;
+            }
+
+            if (NetworkModeRuntime.StartupMode == NetworkStartupMode.Host || NetworkModeRuntime.StartupMode == NetworkStartupMode.Client)
+            {
+                string runtimeAddress = string.IsNullOrWhiteSpace(NetworkModeRuntime.Address)
+                    ? "127.0.0.1"
+                    : NetworkModeRuntime.Address.Trim();
+                ushort runtimePort = NetworkModeRuntime.Port > 0 ? NetworkModeRuntime.Port : (ushort)7777;
+
+                _address = runtimeAddress;
+                _port = runtimePort;
+                _addressField = runtimeAddress;
+            }
+        }
+
+        private bool ConfigureRelayTransport(object relayServerData)
+        {
+            if (_transport == null || relayServerData == null)
+            {
+                return false;
+            }
+
+            MethodInfo relayMethod = _transport.GetType().GetMethod(
+                "SetRelayServerData",
+                BindingFlags.Public | BindingFlags.Instance,
+                null,
+                new[] { relayServerData.GetType() },
+                null);
+
+            if (relayMethod == null)
+            {
+                Debug.LogError("[NetworkSessionBootstrap] UnityTransport.SetRelayServerData overload was not found.");
+                return false;
+            }
+
+            relayMethod.Invoke(_transport, new[] { relayServerData });
+            return true;
+        }
+
+        private bool TryEnterInitialNetworkScene(string sceneName)
+        {
+            if (_networkManager == null || !_networkManager.IsServer || !_networkManager.IsListening)
+            {
+                return false;
+            }
+
+            if (string.IsNullOrWhiteSpace(sceneName))
+            {
+                return false;
+            }
+
+            if (_networkManager.SceneManager == null || !_networkManager.NetworkConfig.EnableSceneManagement)
+            {
+                return false;
+            }
+
+            Scene activeScene = SceneManager.GetActiveScene();
+            if (activeScene.IsValid() && string.Equals(activeScene.name, sceneName, System.StringComparison.Ordinal))
+            {
+                return true;
+            }
+
+            SceneEventProgressStatus status = _networkManager.SceneManager.LoadScene(sceneName, LoadSceneMode.Single);
+            return status == SceneEventProgressStatus.Started || status == SceneEventProgressStatus.SceneEventInProgress;
         }
 
         private string GetStatusLabel()

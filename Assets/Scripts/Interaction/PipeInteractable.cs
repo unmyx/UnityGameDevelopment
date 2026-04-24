@@ -3,8 +3,10 @@ using System.Collections.Generic;
 using Game.Core;
 using Game.Core.Events;
 using Game.Minigames;
+using Game.Networking;
 using Game.Player;
 using TMPro;
+using Unity.Netcode;
 using UnityEngine;
 
 namespace Game.Interaction
@@ -16,6 +18,7 @@ namespace Game.Interaction
     {
         private const int FixedSwipesPerStain = 6;
         private const string DailyTaskType = "cleaning";
+        private const string MinigameId = "cleaning";
 
         [SerializeField]
         private Canvas _cleaningCanvas;
@@ -100,6 +103,32 @@ namespace Game.Interaction
         [Min(-1)]
         private int _requiredStainsMax = -1;
 
+        private bool _awaitingNetworkStartApproval;
+        private string _pendingNetworkStartTaskKey = string.Empty;
+        private bool _hasActiveCleaningSession;
+        private int _activeCleaningSessionToken;
+        private string _activeCleaningTaskKey = string.Empty;
+        private bool _hasSubmittedCleaningResult;
+
+        private void OnEnable()
+        {
+            NetworkSessionProgressAuthority.OnJobInteractableStartResponse += OnJobInteractableStartResponse;
+            NetworkSessionProgressAuthority.OnCleaningResultResolutionResponse += OnCleaningResultResolutionResponse;
+            EventBus.Subscribe<MinigameEndedEvent>(OnMinigameEnded);
+            EventBus.Subscribe<MinigameCancelledEvent>(OnMinigameCancelled);
+        }
+
+        private void OnDisable()
+        {
+            NetworkSessionProgressAuthority.OnJobInteractableStartResponse -= OnJobInteractableStartResponse;
+            NetworkSessionProgressAuthority.OnCleaningResultResolutionResponse -= OnCleaningResultResolutionResponse;
+            EventBus.Unsubscribe<MinigameEndedEvent>(OnMinigameEnded);
+            EventBus.Unsubscribe<MinigameCancelledEvent>(OnMinigameCancelled);
+            _awaitingNetworkStartApproval = false;
+            _pendingNetworkStartTaskKey = string.Empty;
+            ClearActiveCleaningSession();
+        }
+
         protected override MinigameData BuildMinigameData()
         {
             if (!TryResolveRequiredReferences(out string validationError))
@@ -110,7 +139,7 @@ namespace Game.Interaction
 
             MinigameData data = new MinigameData
             {
-                minigameId = "cleaning",
+                minigameId = MinigameId,
                 displayName = "Clean the Pipes",
                 timeLimit = 0f
             };
@@ -171,9 +200,28 @@ namespace Game.Interaction
 
         protected override void StartMinigame(MinigameData data)
         {
-            GameManager gameManager = GameManager.Instance;
             string taskKey = GetDailyTaskLocationKey();
 
+            if (IsNetworkSession())
+            {
+                if (_awaitingNetworkStartApproval)
+                {
+                    return;
+                }
+
+                if (!NetworkSessionProgressAuthority.TryGetLocalRequester(out NetworkSessionProgressAuthority authority))
+                {
+                    EventBus.Publish(new PlayerFeedbackEvent("Task is unavailable right now."));
+                    return;
+                }
+
+                _awaitingNetworkStartApproval = true;
+                _pendingNetworkStartTaskKey = taskKey;
+                authority.RequestJobInteractableStart(DailyTaskType, taskKey, MinigameId);
+                return;
+            }
+
+            GameManager gameManager = GameManager.Instance;
             if (gameManager != null
                 && !gameManager.CanLaunchTaskAtLocation(DailyTaskType, taskKey, out string blockedReason))
             {
@@ -190,8 +238,143 @@ namespace Game.Interaction
                 gameManager.RegisterDailyTaskLaunchContext(DailyTaskType, taskKey);
             }
 
+            StartLocalCleaningMinigame(data);
+        }
+
+        private void OnJobInteractableStartResponse(NetworkSessionProgressAuthority.JobInteractableStartResponse response)
+        {
+            if (!_awaitingNetworkStartApproval)
+            {
+                return;
+            }
+
+            if (!string.Equals(response.taskType, DailyTaskType, StringComparison.Ordinal)
+                || !string.Equals(response.minigameId, MinigameId, StringComparison.Ordinal)
+                || !string.Equals(response.taskKey, _pendingNetworkStartTaskKey, StringComparison.Ordinal))
+            {
+                return;
+            }
+
+            string requestedTaskKey = _pendingNetworkStartTaskKey;
+            _awaitingNetworkStartApproval = false;
+            _pendingNetworkStartTaskKey = string.Empty;
+
+            if (!response.approved)
+            {
+                if (!string.IsNullOrWhiteSpace(response.reason))
+                {
+                    EventBus.Publish(new PlayerFeedbackEvent(response.reason));
+                }
+
+                ClearActiveCleaningSession();
+                return;
+            }
+
+            int sessionToken = response.cleaningSessionToken;
+            string canonicalTaskKey = string.IsNullOrWhiteSpace(response.canonicalTaskKey)
+                ? requestedTaskKey
+                : response.canonicalTaskKey.Trim();
+            if (IsNetworkSession())
+            {
+                if (sessionToken <= 0 || string.IsNullOrWhiteSpace(canonicalTaskKey))
+                {
+                    EventBus.Publish(new PlayerFeedbackEvent("Task start approval was invalid."));
+                    ClearActiveCleaningSession();
+                    return;
+                }
+
+                _hasActiveCleaningSession = true;
+                _activeCleaningSessionToken = sessionToken;
+                _activeCleaningTaskKey = canonicalTaskKey;
+                _hasSubmittedCleaningResult = false;
+            }
+
+            MinigameData approvedData = BuildMinigameData();
+            if (approvedData == null || string.IsNullOrWhiteSpace(approvedData.minigameId))
+            {
+                ClearActiveCleaningSession();
+                return;
+            }
+
+            StartLocalCleaningMinigame(approvedData);
+        }
+
+        private void StartLocalCleaningMinigame(MinigameData data)
+        {
             string ownerPlayerId = PlayerInventoryAuthority.GetLocalOwnerPlayerId();
             MinigameManager.Instance?.StartMinigame<CleaningMinigame>(data, ownerPlayerId);
+        }
+
+        private void OnCleaningResultResolutionResponse(NetworkSessionProgressAuthority.CleaningResultResolutionResponse response)
+        {
+            if (!_hasActiveCleaningSession)
+            {
+                return;
+            }
+
+            if (response.sessionToken != _activeCleaningSessionToken
+                || !string.Equals(response.taskKey ?? string.Empty, _activeCleaningTaskKey ?? string.Empty, StringComparison.Ordinal))
+            {
+                return;
+            }
+
+            if (!response.accepted && !string.IsNullOrWhiteSpace(response.reason))
+            {
+                EventBus.Publish(new PlayerFeedbackEvent(response.reason));
+            }
+
+            ClearActiveCleaningSession();
+        }
+
+        private void OnMinigameEnded(MinigameEndedEvent evt)
+        {
+            TrySubmitCleaningTerminalResult(evt.MinigameId, evt.OwnerPlayerId, evt.Result);
+        }
+
+        private void OnMinigameCancelled(MinigameCancelledEvent evt)
+        {
+            TrySubmitCleaningTerminalResult(evt.MinigameId, evt.OwnerPlayerId, evt.Result);
+        }
+
+        private void TrySubmitCleaningTerminalResult(string minigameId, string ownerPlayerId, MinigameResult result)
+        {
+            if (!_hasActiveCleaningSession || _hasSubmittedCleaningResult || !IsNetworkSession())
+            {
+                return;
+            }
+
+            if (!string.Equals(minigameId, MinigameId, StringComparison.Ordinal))
+            {
+                return;
+            }
+
+            string localOwnerId = PlayerInventoryAuthority.GetLocalOwnerPlayerId();
+            if (!string.Equals(ownerPlayerId, localOwnerId, StringComparison.Ordinal))
+            {
+                return;
+            }
+
+            if (!NetworkSessionProgressAuthority.TryGetLocalRequester(out NetworkSessionProgressAuthority authority))
+            {
+                return;
+            }
+
+            _hasSubmittedCleaningResult = true;
+            authority.RequestResolveCleaningResult(_activeCleaningSessionToken, _activeCleaningTaskKey, result);
+        }
+
+        private void ClearActiveCleaningSession()
+        {
+            _hasActiveCleaningSession = false;
+            _activeCleaningSessionToken = 0;
+            _activeCleaningTaskKey = string.Empty;
+            _hasSubmittedCleaningResult = false;
+        }
+
+        private static bool IsNetworkSession()
+        {
+            NetworkManager manager = NetworkManager.Singleton;
+            return manager != null && manager.IsListening;
         }
 
         public string GetDailyTaskLocationKey()

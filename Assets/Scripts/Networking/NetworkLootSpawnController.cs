@@ -1,16 +1,17 @@
 using Game.Core;
+using Game.Interaction;
 using System;
-using System.Collections;
 using System.Collections.Generic;
 using Unity.Netcode;
 using UnityEngine;
 
-namespace Game.Interaction
+namespace Game.Networking
 {
     /// <summary>
-    /// Scene-local daily loot spawner driven by hand-authored LootSpawnPoint markers.
+    /// Host-authoritative runtime loot spawner for NGO sessions.
+    /// Spawns network loot once per day from LootSpawnPoint markers.
     /// </summary>
-    public class LootSpawnController : MonoBehaviour
+    public class NetworkLootSpawnController : MonoBehaviour
     {
         [Serializable]
         private class LootSpawnEntry
@@ -51,42 +52,25 @@ namespace Game.Interaction
         [Min(0.1f)]
         private float _dayCheckIntervalSeconds = 0.5f;
 
-        private readonly List<GameObject> _spawnedLoot = new List<GameObject>();
-        private GameManager _gameManager;
+        [SerializeField]
+        private bool _enableLogs = true;
+
+        private readonly List<NetworkObject> _spawnedLoot = new List<NetworkObject>();
+        private readonly HashSet<string> _spawnedLootInstanceKeys = new HashSet<string>(StringComparer.Ordinal);
         private float _nextDayCheckTime;
         private int _lastSpawnedDay = -1;
+        private GameManager _gameManager;
 
-        private IEnumerator Start()
+        private void Start()
         {
-            while (_gameManager == null)
-            {
-                _gameManager = GameManager.Instance;
-                if (_gameManager == null)
-                {
-                    yield return null;
-                }
-            }
-
-            if (ShouldSkipForNetworkSession())
-            {
-                ClearSpawnedLoot();
-                _lastSpawnedDay = -1;
-                yield break;
-            }
-
+            _gameManager = GameManager.Instance;
             TryRebuildForCurrentDay(force: true);
         }
 
         private void Update()
         {
-            if (ShouldSkipForNetworkSession())
+            if (!IsNetworkServerActive())
             {
-                if (_spawnedLoot.Count > 0)
-                {
-                    ClearSpawnedLoot();
-                }
-
-                _lastSpawnedDay = -1;
                 return;
             }
 
@@ -101,21 +85,25 @@ namespace Game.Interaction
 
         private void OnDisable()
         {
-            ClearSpawnedLoot();
+            if (IsNetworkServerActive())
+            {
+                ClearSpawnedLoot();
+            }
         }
 
         private void TryRebuildForCurrentDay(bool force)
         {
+            if (!IsNetworkServerActive())
+            {
+                return;
+            }
+
             if (_gameManager == null)
             {
                 _gameManager = GameManager.Instance;
-                if (_gameManager == null)
-                {
-                    return;
-                }
             }
 
-            int currentDay = Mathf.Max(1, _gameManager.GetCurrentDay());
+            int currentDay = _gameManager != null ? Mathf.Max(1, _gameManager.GetCurrentDay()) : 1;
             if (!force && currentDay == _lastSpawnedDay)
             {
                 return;
@@ -206,57 +194,65 @@ namespace Game.Interaction
                         continue;
                     }
 
+                    string instanceKey = BuildRuntimeLootInstanceKey(day, normalizedLootType, selectedPointId);
+                    if (_spawnedLootInstanceKeys.Contains(instanceKey))
+                    {
+                        continue;
+                    }
+
                     try
                     {
-                        UnityEngine.Object spawnedObject = UnityEngine.Object.Instantiate(
-                            (UnityEngine.Object)entry.lootPrefab,
+                        GameObject spawnedLoot = Instantiate(
+                            entry.lootPrefab,
                             selectedPoint.transform.position,
                             selectedPoint.transform.rotation,
                             transform);
 
-                        GameObject spawnedLoot = spawnedObject as GameObject;
-                        if (spawnedLoot == null && spawnedObject is Component spawnedComponent)
-                        {
-                            spawnedLoot = spawnedComponent.gameObject;
-                        }
-
                         if (spawnedLoot == null)
                         {
-                            string referencedType = spawnedObject == null ? "null" : spawnedObject.GetType().FullName;
-                            string referencedName = spawnedObject == null ? "null" : spawnedObject.name;
-                            Debug.LogError(
-                                $"[LootSpawnController] Spawn failed to resolve GameObject. " +
-                                $"LootType='{normalizedLootType}', PointId='{selectedPointId}', " +
-                                $"SpawnedType='{referencedType}', SpawnedName='{referencedName}'.",
-                                this);
                             continue;
                         }
 
-                        InteractableItem interactableItem = spawnedLoot.GetComponent<InteractableItem>();
-                        if (interactableItem == null)
+                        NetworkObject networkObject = spawnedLoot.GetComponent<NetworkObject>();
+                        if (networkObject == null)
                         {
                             Debug.LogError(
-                                $"[LootSpawnController] Spawned loot is missing InteractableItem on root. " +
-                                $"LootType='{normalizedLootType}', PointId='{selectedPointId}', SpawnedName='{spawnedLoot.name}'.",
+                                $"[NetworkLootSpawnController] Spawned network loot prefab is missing NetworkObject. " +
+                                $"LootType='{normalizedLootType}', PointId='{selectedPointId}', Prefab='{entry.lootPrefab.name}'.",
                                 spawnedLoot);
                             Destroy(spawnedLoot);
                             continue;
                         }
 
-                        string runtimeCollectibleId = BuildRuntimeCollectibleId(day, normalizedLootType, selectedPointId);
-                        interactableItem.ConfigureRuntimePersistenceId(runtimeCollectibleId);
+                        if (!spawnedLoot.TryGetComponent<InteractableItem>(out _))
+                        {
+                            Debug.LogError(
+                                $"[NetworkLootSpawnController] Spawned network loot is missing InteractableItem. " +
+                                $"LootType='{normalizedLootType}', PointId='{selectedPointId}', Prefab='{entry.lootPrefab.name}'.",
+                                spawnedLoot);
+                            Destroy(spawnedLoot);
+                            continue;
+                        }
 
-                        _spawnedLoot.Add(spawnedLoot);
+                        networkObject.Spawn(destroyWithScene: true);
+                        _spawnedLoot.Add(networkObject);
+                        _spawnedLootInstanceKeys.Add(instanceKey);
                         usedPointIds.Add(selectedPointId);
+
+                        if (_enableLogs)
+                        {
+                            Debug.Log(
+                                $"[NetworkLootSpawnController] Spawned network loot '{normalizedLootType}' at point '{selectedPointId}' for day {day}.",
+                                spawnedLoot);
+                        }
                     }
                     catch (Exception exception)
                     {
                         Debug.LogError(
-                            $"[LootSpawnController] Exception while spawning loot. " +
+                            $"[NetworkLootSpawnController] Exception while spawning network loot. " +
                             $"LootType='{normalizedLootType}', PointId='{selectedPointId}', Prefab='{entry.lootPrefab?.name ?? "null"}'. " +
                             $"Exception: {exception.GetType().Name} - {exception.Message}",
                             this);
-                        continue;
                     }
                 }
             }
@@ -266,16 +262,24 @@ namespace Game.Interaction
         {
             for (int i = 0; i < _spawnedLoot.Count; i++)
             {
-                GameObject spawnedObject = _spawnedLoot[i];
+                NetworkObject spawnedObject = _spawnedLoot[i];
                 if (spawnedObject == null)
                 {
                     continue;
                 }
 
-                Destroy(spawnedObject);
+                if (spawnedObject.IsSpawned && spawnedObject.NetworkManager != null && spawnedObject.NetworkManager.IsServer)
+                {
+                    spawnedObject.Despawn(destroy: true);
+                }
+                else
+                {
+                    Destroy(spawnedObject.gameObject);
+                }
             }
 
             _spawnedLoot.Clear();
+            _spawnedLootInstanceKeys.Clear();
         }
 
         private Dictionary<string, List<LootSpawnPoint>> BuildPointsByType(LootSpawnPoint[] points)
@@ -300,7 +304,7 @@ namespace Game.Interaction
 
                 if (!seenPointIds.Add(pointId))
                 {
-                    Debug.LogWarning($"[LootSpawnController] Duplicate LootSpawnPoint id '{pointId}' ignored.", point);
+                    Debug.LogWarning($"[NetworkLootSpawnController] Duplicate LootSpawnPoint id '{pointId}' ignored.", point);
                     continue;
                 }
 
@@ -325,7 +329,31 @@ namespace Game.Interaction
             }
 
             normalizedLootType = NormalizeId(entry.lootTypeId);
-            return !string.IsNullOrEmpty(normalizedLootType);
+            if (string.IsNullOrEmpty(normalizedLootType))
+            {
+                return false;
+            }
+
+            if (!entry.lootPrefab.TryGetComponent<NetworkObject>(out _))
+            {
+                Debug.LogError(
+                    $"[NetworkLootSpawnController] Loot entry prefab '{entry.lootPrefab.name}' is missing NetworkObject.",
+                    this);
+                return false;
+            }
+
+            return true;
+        }
+
+        private static string BuildRuntimeLootInstanceKey(int day, string lootTypeId, string pointId)
+        {
+            return $"netloot.day{Mathf.Max(1, day)}.{lootTypeId}.{pointId}";
+        }
+
+        private bool IsNetworkServerActive()
+        {
+            NetworkManager manager = NetworkManager.Singleton;
+            return manager != null && manager.IsListening && manager.IsServer;
         }
 
         private int BuildSeed(int day)
@@ -338,11 +366,6 @@ namespace Game.Interaction
                 hash = (hash * 31) + ComputeStableHash(gameObject.scene.name);
                 return hash;
             }
-        }
-
-        private static string BuildRuntimeCollectibleId(int day, string lootTypeId, string pointId)
-        {
-            return $"lootspawn.gameplay.day{Mathf.Max(1, day)}.{lootTypeId}.{pointId}";
         }
 
         private static string NormalizeId(string value)
@@ -369,12 +392,6 @@ namespace Game.Interaction
 
                 return hash;
             }
-        }
-
-        private static bool ShouldSkipForNetworkSession()
-        {
-            NetworkManager manager = NetworkManager.Singleton;
-            return manager != null && manager.IsListening;
         }
     }
 }

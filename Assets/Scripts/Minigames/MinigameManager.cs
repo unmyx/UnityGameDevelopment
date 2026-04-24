@@ -283,6 +283,22 @@ namespace Game.Minigames
             return _activeMinigame != null && _activeMinigame.IsActive();
         }
 
+        public bool ForceCancelActiveMinigameForLocalOwner()
+        {
+            if (_activeMinigame == null)
+            {
+                return false;
+            }
+
+            if (!PlayerInventoryAuthority.IsLocalOwner(_activeOwnerPlayerId))
+            {
+                return false;
+            }
+
+            CancelActiveMinigame();
+            return true;
+        }
+
         public bool IsMinigameActiveForOwner(string ownerPlayerId)
         {
             if (!IsMinigameActive())

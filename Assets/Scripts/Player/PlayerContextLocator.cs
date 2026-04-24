@@ -2,6 +2,7 @@ using Game.Interaction;
 using Game.UI;
 using UnityEngine;
 using System.Collections.Generic;
+using Unity.Netcode;
 
 namespace Game.Player
 {
@@ -394,6 +395,12 @@ namespace Game.Player
     {
         public static string GetLocalOwnerPlayerId()
         {
+            NetworkManager networkManager = NetworkManager.Singleton;
+            if (networkManager != null && networkManager.IsListening)
+            {
+                return $"net_client_{networkManager.LocalClientId}";
+            }
+
             if (PlayerContextLocator.TryGetLocalContext(out PlayerContext context)
                 && context != null
                 && !string.IsNullOrWhiteSpace(context.PlayerId))
@@ -416,7 +423,7 @@ namespace Game.Player
             string normalizedOwner = NormalizeOwnerPlayerId(ownerPlayerId);
             return string.Equals(
                 normalizedOwner,
-                PlayerContextRegistry.DefaultLocalPlayerId,
+                GetLocalOwnerPlayerId(),
                 System.StringComparison.Ordinal);
         }
 
@@ -431,7 +438,7 @@ namespace Game.Player
 
             Debug.LogWarning(
                 $"[PlayerInventoryAuthority] Non-local owner '{NormalizeOwnerPlayerId(ownerPlayerId)}' used at '{callsite}'. " +
-                "MP-4 still uses local-only backing storage. TODO(MP-5): split per-player storage.",
+                "Owner-aware storage is active; verify caller ownership routing.",
                 contextObject);
         }
     }

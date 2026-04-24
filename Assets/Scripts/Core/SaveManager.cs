@@ -4,6 +4,8 @@ using System;
 using Game.Inventory;
 using Game.Interaction;
 using Game.Minigames;
+using Game.Player;
+using Unity.Netcode;
 
 namespace Game.Core
 {
@@ -90,6 +92,12 @@ namespace Game.Core
         {
             try
             {
+                if (IsNonAuthoritativeNetworkClient())
+                {
+                    Debug.LogWarning("[SaveManager] Save skipped on non-authoritative network client.");
+                    return false;
+                }
+
                 if (!TryValidateContext(context, "Save", out string failureReason))
                 {
                     Debug.LogError($"[SaveManager] {failureReason}");
@@ -99,31 +107,26 @@ namespace Game.Core
                 SaveData data = new SaveData();
 
                 // Currency remains persisted from GameManager.
-                data.currency = context.GameManager.GetCurrency();
-                data.dayWorkEarnings = context.GameManager.GetDayWorkEarnings();
-                data.currentDay = context.GameManager.GetCurrentDay();
-                data.currentRunPhase = (int)context.GameManager.GetCurrentRunPhase();
-                data.workdayCompleted = context.GameManager.IsWorkdayCompleted();
-                data.currentWorkHour = context.GameManager.GetCurrentWorkHourForSave();
-                data.nextTaskWaveIndex = context.GameManager.GetNextTaskWaveIndexForSave();
-                data.consecutiveFailedWorkdays = context.GameManager.GetConsecutiveFailedWorkdays();
-                data.runFailed = context.GameManager.IsRunFailed();
-                data.runFailedReason = context.GameManager.GetRunFailedReason();
-                data.failedLieEscalationCountThisDay = context.GameManager.GetFailedLieEscalationCountThisDay();
-                data.dailyTaskAssignments = context.GameManager.GetDailyTaskAssignmentsForSave();
-                data.generatedTaskWaves = context.GameManager.GetGeneratedTaskWavesForSave();
-                data.unlockedTaskKeys = context.GameManager.GetUnlockedTaskKeysForSave();
-                data.stolenLootThisDay = context.GameManager.GetStolenLootThisDaySnapshot();
+                WorldSaveState worldState = BuildWorldState(context);
+                data.worldState = worldState;
 
-                if (context.GameManager.TryGetAuthoritativePlayerTransform(out Transform playerTransform) && playerTransform != null)
-                {
-                    data.hasPlayerTransform = true;
-                    data.playerPosition = playerTransform.position;
-                    data.playerRotation = playerTransform.rotation;
-                }
-
-                data.selectedInventorySlotIndex = context.GameManager.GetSelectedInventorySlotIndexForSave();
-                data.ownedTools = context.GameManager.GetOwnedToolUpgradesForSave();
+                // Legacy flat fields remain populated for backward compatibility.
+                data.currency = worldState.currency;
+                data.dayWorkEarnings = worldState.dayWorkEarnings;
+                data.currentDay = worldState.currentDay;
+                data.currentRunPhase = worldState.currentRunPhase;
+                data.workdayCompleted = worldState.workdayCompleted;
+                data.currentWorkHour = worldState.currentWorkHour;
+                data.nextTaskWaveIndex = worldState.nextTaskWaveIndex;
+                data.consecutiveFailedWorkdays = worldState.consecutiveFailedWorkdays;
+                data.runFailed = worldState.runFailed;
+                data.runFailedReason = worldState.runFailedReason;
+                data.failedLieEscalationCountThisDay = worldState.failedLieEscalationCountThisDay;
+                data.dailyTaskAssignments = worldState.dailyTaskAssignments ?? new List<DailyTaskAssignmentData>();
+                data.generatedTaskWaves = worldState.generatedTaskWaves ?? new List<GeneratedTaskWaveData>();
+                data.unlockedTaskKeys = worldState.unlockedTaskKeys ?? new List<string>();
+                data.stolenLootThisDay = worldState.stolenLootThisDay ?? new List<StolenLootEntryData>();
+                data.ownedTools = worldState.ownedTools ?? new List<ToolDataEntry>();
 
                 // Gather inventory state from InventorySystem
                 InventorySlotData[] inventorySnapshot = context.InventorySystem.GetInventorySnapshot();
@@ -135,21 +138,47 @@ namespace Game.Core
                     }
                 }
 
+                string localOwnerKey = PlayerInventoryAuthority.GetLocalOwnerPlayerId();
+                PlayerSaveState localPlayerState = new PlayerSaveState
+                {
+                    ownerKey = localOwnerKey,
+                    selectedInventorySlotIndex = context.GameManager.GetSelectedInventorySlotIndexForSave(),
+                    inventory = new List<InventorySlotData>(data.inventory)
+                };
+
+                if (context.GameManager.TryGetAuthoritativePlayerTransform(out Transform playerTransform) && playerTransform != null)
+                {
+                    localPlayerState.hasPlayerTransform = true;
+                    localPlayerState.playerPosition = playerTransform.position;
+                    localPlayerState.playerRotation = playerTransform.rotation;
+                }
+
+                data.playerStates.Clear();
+                data.playerStates.Add(localPlayerState);
+
+                // Legacy flat player fields remain populated for backward compatibility.
+                data.hasPlayerTransform = localPlayerState.hasPlayerTransform;
+                data.playerPosition = localPlayerState.playerPosition;
+                data.playerRotation = localPlayerState.playerRotation;
+                data.selectedInventorySlotIndex = localPlayerState.selectedInventorySlotIndex;
+
                 // Gather objectives from ObjectiveManager
                 ObjectiveStates objectiveStates = context.ObjectiveManager.GetObjectiveStates();
                 foreach (var objectiveId in objectiveStates.completedObjectiveIds)
                 {
-                    data.objectives.completedObjectiveIds.Add(objectiveId);
+                    worldState.objectives.completedObjectiveIds.Add(objectiveId);
                 }
                 foreach (var activeObj in objectiveStates.activeObjectives)
                 {
-                    data.objectives.activeObjectives.Add(new ObjectiveProgressData(activeObj.objectiveId, activeObj.currentProgress));
+                    worldState.objectives.activeObjectives.Add(new ObjectiveProgressData(activeObj.objectiveId, activeObj.currentProgress));
                 }
-                data.objectives.isMissionComplete = objectiveStates.isMissionComplete;
+                worldState.objectives.isMissionComplete = objectiveStates.isMissionComplete;
+                data.objectives = worldState.objectives;
 
                 List<string> consumedCollectibles = new List<string>(ConsumedCollectibleIds);
                 consumedCollectibles.Sort(StringComparer.Ordinal);
-                data.consumedCollectibleIds.AddRange(consumedCollectibles);
+                worldState.consumedCollectibleIds.AddRange(consumedCollectibles);
+                data.consumedCollectibleIds = worldState.consumedCollectibleIds;
 
                 // Serialize to JSON
                 string json = JsonUtility.ToJson(data, true);
@@ -187,6 +216,12 @@ namespace Game.Core
         {
             try
             {
+                if (IsNonAuthoritativeNetworkClient())
+                {
+                    Debug.LogWarning("[SaveManager] Load skipped on non-authoritative network client.");
+                    return false;
+                }
+
                 if (!TryValidateContext(context, "Load", out string failureReason))
                 {
                     Debug.LogError($"[SaveManager] {failureReason}");
@@ -208,41 +243,44 @@ namespace Game.Core
                     return false;
                 }
 
+                WorldSaveState worldState = ResolveWorldState(data);
+                PlayerSaveState localPlayerState = ResolveLocalPlayerState(data);
+
                 // Restore runtime currency owned by GameManager.
-                context.GameManager.RestoreCurrencyFromSave(data.currency);
-                context.GameManager.RestoreDayWorkEarningsFromSave(data.dayWorkEarnings);
+                context.GameManager.RestoreCurrencyFromSave(worldState.currency);
+                context.GameManager.RestoreDayWorkEarningsFromSave(worldState.dayWorkEarnings);
                 context.GameManager.RestoreRunProgressFromSave(
-                    data.currentDay,
-                    data.currentRunPhase,
-                    data.workdayCompleted,
-                    data.consecutiveFailedWorkdays,
-                    data.runFailed,
-                    data.runFailedReason);
-                context.GameManager.RestoreFailedLieEscalationCountThisDayFromSave(data.failedLieEscalationCountThisDay);
-                context.GameManager.RestoreDailyTaskAssignmentsFromSave(data.dailyTaskAssignments);
+                    worldState.currentDay,
+                    worldState.currentRunPhase,
+                    worldState.workdayCompleted,
+                    worldState.consecutiveFailedWorkdays,
+                    worldState.runFailed,
+                    worldState.runFailedReason);
+                context.GameManager.RestoreFailedLieEscalationCountThisDayFromSave(worldState.failedLieEscalationCountThisDay);
+                context.GameManager.RestoreDailyTaskAssignmentsFromSave(worldState.dailyTaskAssignments);
                 context.GameManager.RestoreWorkdayRuntimeFromSave(
-                    data.currentWorkHour,
-                    data.nextTaskWaveIndex,
-                    data.generatedTaskWaves,
-                    data.unlockedTaskKeys);
-                context.GameManager.RestoreStolenLootThisDayFromSave(data.stolenLootThisDay);
-                context.GameManager.RestoreOwnedToolUpgradesFromSave(data.ownedTools);
+                    worldState.currentWorkHour,
+                    worldState.nextTaskWaveIndex,
+                    worldState.generatedTaskWaves,
+                    worldState.unlockedTaskKeys);
+                context.GameManager.RestoreStolenLootThisDayFromSaveForAllOwners(worldState.stolenLootThisDay);
+                context.GameManager.RestoreOwnedToolUpgradesFromSave(worldState.ownedTools);
 
                 // Restore InventorySystem (grid state)
-                context.InventorySystem.RestoreFromSave(data.inventory);
+                context.InventorySystem.RestoreFromSave(localPlayerState.inventory);
 
                 // Restore ObjectiveManager (objectives and progress)
-                context.ObjectiveManager.RestoreFromSave(data.objectives);
+                context.ObjectiveManager.RestoreFromSave(worldState.objectives);
                 context.ObjectiveManager.SyncAfterLoad();
 
-                if (data.hasPlayerTransform)
+                if (localPlayerState.hasPlayerTransform)
                 {
-                    context.GameManager.RestorePlayerTransformFromSave(data.playerPosition, data.playerRotation);
+                    context.GameManager.RestorePlayerTransformFromSave(localPlayerState.playerPosition, localPlayerState.playerRotation);
                 }
 
-                context.GameManager.RestoreSelectedInventorySlotFromSave(data.selectedInventorySlotIndex);
+                context.GameManager.RestoreSelectedInventorySlotFromSave(localPlayerState.selectedInventorySlotIndex);
 
-                RestoreConsumedCollectibles(data.consumedCollectibleIds);
+                RestoreConsumedCollectibles(worldState.consumedCollectibleIds);
                 ApplyConsumedCollectibleStateToScene();
 
                 Debug.Log($"<color=green>Game loaded successfully!</color> File: {SaveFilePath}");
@@ -283,10 +321,12 @@ namespace Game.Core
                     return false;
                 }
 
-                runFailed = data.runFailed || data.currentRunPhase == (int)GameManager.RunPhase.GameOver;
-                reason = string.IsNullOrWhiteSpace(data.runFailedReason)
+                WorldSaveState worldState = ResolveWorldState(data);
+
+                runFailed = worldState.runFailed || worldState.currentRunPhase == (int)GameManager.RunPhase.GameOver;
+                reason = string.IsNullOrWhiteSpace(worldState.runFailedReason)
                     ? string.Empty
-                    : data.runFailedReason.Trim();
+                    : worldState.runFailedReason.Trim();
 
                 if (!runFailed)
                 {
@@ -331,14 +371,16 @@ namespace Game.Core
                     return false;
                 }
 
-                currentDay = Mathf.Max(1, data.currentDay);
-                if (data.currentRunPhase >= (int)GameManager.RunPhase.Work
-                    && data.currentRunPhase <= (int)GameManager.RunPhase.GameOver)
+                WorldSaveState worldState = ResolveWorldState(data);
+
+                currentDay = Mathf.Max(1, worldState.currentDay);
+                if (worldState.currentRunPhase >= (int)GameManager.RunPhase.Work
+                    && worldState.currentRunPhase <= (int)GameManager.RunPhase.GameOver)
                 {
-                    currentRunPhase = data.currentRunPhase;
+                    currentRunPhase = worldState.currentRunPhase;
                 }
 
-                runFailed = data.runFailed || currentRunPhase == (int)GameManager.RunPhase.GameOver;
+                runFailed = worldState.runFailed || currentRunPhase == (int)GameManager.RunPhase.GameOver;
                 return true;
             }
             catch (System.Exception e)
@@ -514,6 +556,134 @@ namespace Game.Core
             failureReason =
                 $"{operationName} failed because SaveContext is missing required references: {string.Join(", ", missing)}.";
             return false;
+        }
+
+        private static bool IsNonAuthoritativeNetworkClient()
+        {
+            NetworkManager manager = NetworkManager.Singleton;
+            return manager != null && manager.IsListening && manager.IsClient && !manager.IsServer;
+        }
+
+        private static WorldSaveState BuildWorldState(SaveContext context)
+        {
+            return new WorldSaveState
+            {
+                currency = context.GameManager.GetCurrency(),
+                dayWorkEarnings = context.GameManager.GetDayWorkEarnings(),
+                currentDay = context.GameManager.GetCurrentDay(),
+                currentRunPhase = (int)context.GameManager.GetCurrentRunPhase(),
+                workdayCompleted = context.GameManager.IsWorkdayCompleted(),
+                currentWorkHour = context.GameManager.GetCurrentWorkHourForSave(),
+                nextTaskWaveIndex = context.GameManager.GetNextTaskWaveIndexForSave(),
+                consecutiveFailedWorkdays = context.GameManager.GetConsecutiveFailedWorkdays(),
+                runFailed = context.GameManager.IsRunFailed(),
+                runFailedReason = context.GameManager.GetRunFailedReason(),
+                failedLieEscalationCountThisDay = context.GameManager.GetFailedLieEscalationCountThisDay(),
+                dailyTaskAssignments = context.GameManager.GetDailyTaskAssignmentsForSave(),
+                generatedTaskWaves = context.GameManager.GetGeneratedTaskWavesForSave(),
+                unlockedTaskKeys = context.GameManager.GetUnlockedTaskKeysForSave(),
+                stolenLootThisDay = context.GameManager.GetStolenLootThisDaySnapshotForAllOwners(),
+                ownedTools = context.GameManager.GetOwnedToolUpgradesForSave(),
+                objectives = new ObjectivesSaveData(),
+                consumedCollectibleIds = new List<string>()
+            };
+        }
+
+        private static WorldSaveState ResolveWorldState(SaveData data)
+        {
+            if (data != null && data.worldState != null)
+            {
+                WorldSaveState structured = data.worldState;
+                structured.objectives ??= new ObjectivesSaveData();
+                structured.ownedTools ??= new List<ToolDataEntry>();
+                structured.dailyTaskAssignments ??= new List<DailyTaskAssignmentData>();
+                structured.generatedTaskWaves ??= new List<GeneratedTaskWaveData>();
+                structured.unlockedTaskKeys ??= new List<string>();
+                structured.stolenLootThisDay ??= new List<StolenLootEntryData>();
+                structured.consumedCollectibleIds ??= new List<string>();
+                return structured;
+            }
+
+            return new WorldSaveState
+            {
+                currency = data != null ? data.currency : 0,
+                dayWorkEarnings = data != null ? data.dayWorkEarnings : 0,
+                currentDay = data != null ? data.currentDay : 1,
+                currentRunPhase = data != null ? data.currentRunPhase : 0,
+                workdayCompleted = data != null && data.workdayCompleted,
+                currentWorkHour = data != null ? data.currentWorkHour : 7f,
+                nextTaskWaveIndex = data != null ? data.nextTaskWaveIndex : 0,
+                consecutiveFailedWorkdays = data != null ? data.consecutiveFailedWorkdays : 0,
+                runFailed = data != null && data.runFailed,
+                runFailedReason = data != null ? data.runFailedReason : string.Empty,
+                failedLieEscalationCountThisDay = data != null ? data.failedLieEscalationCountThisDay : 0,
+                ownedTools = data?.ownedTools ?? new List<ToolDataEntry>(),
+                objectives = data?.objectives ?? new ObjectivesSaveData(),
+                consumedCollectibleIds = data?.consumedCollectibleIds ?? new List<string>(),
+                dailyTaskAssignments = data?.dailyTaskAssignments ?? new List<DailyTaskAssignmentData>(),
+                generatedTaskWaves = data?.generatedTaskWaves ?? new List<GeneratedTaskWaveData>(),
+                unlockedTaskKeys = data?.unlockedTaskKeys ?? new List<string>(),
+                stolenLootThisDay = data?.stolenLootThisDay ?? new List<StolenLootEntryData>()
+            };
+        }
+
+        private static PlayerSaveState ResolveLocalPlayerState(SaveData data)
+        {
+            string localOwnerKey = PlayerInventoryAuthority.GetLocalOwnerPlayerId();
+            if (data != null && data.playerStates != null && data.playerStates.Count > 0)
+            {
+                for (int i = 0; i < data.playerStates.Count; i++)
+                {
+                    PlayerSaveState candidate = data.playerStates[i];
+                    if (candidate == null || string.IsNullOrWhiteSpace(candidate.ownerKey))
+                    {
+                        continue;
+                    }
+
+                    if (string.Equals(candidate.ownerKey.Trim(), localOwnerKey, StringComparison.Ordinal))
+                    {
+                        candidate.inventory ??= new List<InventorySlotData>();
+                        return candidate;
+                    }
+                }
+
+                for (int i = 0; i < data.playerStates.Count; i++)
+                {
+                    PlayerSaveState candidate = data.playerStates[i];
+                    if (candidate == null || string.IsNullOrWhiteSpace(candidate.ownerKey))
+                    {
+                        continue;
+                    }
+
+                    if (string.Equals(candidate.ownerKey.Trim(), PlayerContextRegistry.DefaultLocalPlayerId, StringComparison.Ordinal))
+                    {
+                        candidate.inventory ??= new List<InventorySlotData>();
+                        return candidate;
+                    }
+                }
+
+                for (int i = 0; i < data.playerStates.Count; i++)
+                {
+                    PlayerSaveState candidate = data.playerStates[i];
+                    if (candidate == null)
+                    {
+                        continue;
+                    }
+
+                    candidate.inventory ??= new List<InventorySlotData>();
+                    return candidate;
+                }
+            }
+
+            return new PlayerSaveState
+            {
+                ownerKey = localOwnerKey,
+                hasPlayerTransform = data != null && data.hasPlayerTransform,
+                playerPosition = data != null ? data.playerPosition : Vector3.zero,
+                playerRotation = data != null ? data.playerRotation : Quaternion.identity,
+                selectedInventorySlotIndex = data != null ? data.selectedInventorySlotIndex : 0,
+                inventory = data?.inventory ?? new List<InventorySlotData>()
+            };
         }
     }
 }

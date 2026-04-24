@@ -4,6 +4,7 @@ using Game.Minigames;
 using Game.Inventory;
 using Game.Core.Events;
 using Game.Player;
+using Unity.Netcode;
 
 namespace Game.Core
 {
@@ -659,6 +660,11 @@ namespace Game.Core
                 return;
             }
 
+            if (IsNonAuthoritativeNetworkClient())
+            {
+                return;
+            }
+
             if (objective.RewardCurrency > 0)
             {
                 GameManager gameManager = GameManager.Instance;
@@ -702,6 +708,12 @@ namespace Game.Core
                     EventBus.Publish(new ItemPickupFailedEvent(rewardItem.ItemName));
                 }
             }
+        }
+
+        private static bool IsNonAuthoritativeNetworkClient()
+        {
+            NetworkManager manager = NetworkManager.Singleton;
+            return manager != null && manager.IsListening && manager.IsClient && !manager.IsServer;
         }
     }
 

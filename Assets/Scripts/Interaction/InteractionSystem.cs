@@ -1,6 +1,7 @@
 using Game.Core;
 using Game.Input;
 using Game.Minigames;
+using Game.Networking;
 using Game.Player;
 using UnityEngine;
 
@@ -177,12 +178,40 @@ namespace Game.Interaction
                 return;
             }
 
+            if (TryRouteNetworkInteraction(capturedInteractable))
+            {
+                return;
+            }
+
             if (_enableInteractionLogs)
             {
                 Debug.Log($"[InteractionSystem] Calling Interact() on {GetInteractableDebugName(capturedInteractable)}.");
             }
 
             capturedInteractable.Interact();
+        }
+
+        private bool TryRouteNetworkInteraction(BaseInteractable capturedInteractable)
+        {
+            if (capturedInteractable == null)
+            {
+                return false;
+            }
+
+            NetworkInteractionAuthorityBridge authorityBridge =
+                capturedInteractable.GetComponent<NetworkInteractionAuthorityBridge>();
+            if (authorityBridge == null || !authorityBridge.ShouldRouteThroughNetworkAuthority())
+            {
+                return false;
+            }
+
+            if (_enableInteractionLogs)
+            {
+                Debug.Log($"[InteractionSystem] Routing interaction through network authority bridge for {GetInteractableDebugName(capturedInteractable)}.");
+            }
+
+            authorityBridge.RequestAuthoritativeInteraction();
+            return true;
         }
 
         private void DebugDrawRaycast()

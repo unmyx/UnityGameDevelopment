@@ -1,6 +1,8 @@
 using UnityEngine;
 using Game.Core;
 using Game.Core.Events;
+using Game.Networking;
+using Unity.Netcode;
 
 namespace Game.Interaction
 {
@@ -38,6 +40,31 @@ namespace Game.Interaction
             if (gameManager == null)
             {
                 Debug.LogWarning("[RunPhaseActionInteractable] GameManager instance is unavailable.", this);
+                return;
+            }
+
+            if (IsNonAuthoritativeNetworkClient()
+                && NetworkSessionProgressAuthority.TryGetLocalRequester(out NetworkSessionProgressAuthority authority))
+            {
+                switch (_action)
+                {
+                    case InteractionAction.EndWorkdayAndGoHome:
+                        authority.RequestCompleteWorkdayAndGoHome();
+                        break;
+
+                    case InteractionAction.SleepStartNextDay:
+                        authority.RequestStartNextDay();
+                        break;
+
+                    case InteractionAction.SellTrackedStolenLoot:
+                        authority.RequestSellTrackedStolenLoot();
+                        break;
+
+                    case InteractionAction.PurchaseUpgrade:
+                        authority.RequestPurchaseUpgrade(_upgradeId);
+                        break;
+                }
+
                 return;
             }
 
@@ -113,6 +140,12 @@ namespace Game.Interaction
             }
 
             EventBus.Publish(new PlayerFeedbackEvent(message));
+        }
+
+        private static bool IsNonAuthoritativeNetworkClient()
+        {
+            NetworkManager manager = NetworkManager.Singleton;
+            return manager != null && manager.IsListening && manager.IsClient && !manager.IsServer;
         }
     }
 }

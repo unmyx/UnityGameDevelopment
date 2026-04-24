@@ -25,6 +25,10 @@ namespace Game.Core
     [System.Serializable]
     public class SaveData
     {
+        public WorldSaveState worldState = new WorldSaveState();
+        public List<PlayerSaveState> playerStates = new List<PlayerSaveState>();
+
+        // Legacy fields kept for backward compatibility with existing save files.
         public int currency;
         public int dayWorkEarnings;
         public int currentDay = 1;
@@ -51,6 +55,40 @@ namespace Game.Core
     }
 
     [System.Serializable]
+    public class WorldSaveState
+    {
+        public int currency;
+        public int dayWorkEarnings;
+        public int currentDay = 1;
+        public int currentRunPhase;
+        public bool workdayCompleted;
+        public float currentWorkHour = 7f;
+        public int nextTaskWaveIndex;
+        public int consecutiveFailedWorkdays;
+        public bool runFailed;
+        public string runFailedReason;
+        public int failedLieEscalationCountThisDay;
+        public List<ToolDataEntry> ownedTools = new List<ToolDataEntry>();
+        public ObjectivesSaveData objectives = new ObjectivesSaveData();
+        public List<string> consumedCollectibleIds = new List<string>();
+        public List<DailyTaskAssignmentData> dailyTaskAssignments = new List<DailyTaskAssignmentData>();
+        public List<GeneratedTaskWaveData> generatedTaskWaves = new List<GeneratedTaskWaveData>();
+        public List<string> unlockedTaskKeys = new List<string>();
+        public List<StolenLootEntryData> stolenLootThisDay = new List<StolenLootEntryData>();
+    }
+
+    [System.Serializable]
+    public class PlayerSaveState
+    {
+        public string ownerKey;
+        public bool hasPlayerTransform;
+        public Vector3 playerPosition;
+        public Quaternion playerRotation;
+        public int selectedInventorySlotIndex;
+        public List<InventorySlotData> inventory = new List<InventorySlotData>();
+    }
+
+    [System.Serializable]
     public class ToolDataEntry
     {
         public string toolId;
@@ -74,6 +112,7 @@ namespace Game.Core
     [System.Serializable]
     public class StolenLootEntryData
     {
+        public string ownerKey;
         public string itemId;
         public int count;
     }

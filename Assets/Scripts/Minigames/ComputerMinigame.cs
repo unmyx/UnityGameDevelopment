@@ -1,7 +1,9 @@
 using Game.Core;
 using Game.Core.Events;
 using Game.Input;
+using Game.Networking;
 using Game.Player;
+using Unity.Netcode;
 using UnityEngine;
 
 namespace Game.Minigames
@@ -69,6 +71,10 @@ namespace Game.Minigames
         private CursorLockMode _previousCursorLockMode;
         private bool _previousCursorVisible;
         private bool _usesPresentationCursorAuthority;
+        private bool _awaitingNetworkSellResponse;
+        private string _pendingNetworkSellItemId = string.Empty;
+        private bool _awaitingNetworkUpgradeResponse;
+        private string _pendingNetworkUpgradeId = string.Empty;
 
         protected override void OnInitialize()
         {
@@ -117,6 +123,19 @@ namespace Game.Minigames
                 _uiController.SetStatusMessage(string.Empty);
             }
 
+            NetworkSessionProgressAuthority.OnStolenLootSellItemResponse -= OnStolenLootSellItemResponse;
+            NetworkSessionProgressAuthority.OnStolenLootSellItemResponse += OnStolenLootSellItemResponse;
+            NetworkSessionProgressAuthority.OnUpgradePurchaseResponse -= OnUpgradePurchaseResponse;
+            NetworkSessionProgressAuthority.OnUpgradePurchaseResponse += OnUpgradePurchaseResponse;
+            NetworkSessionProgressAuthority.OnOwnerStolenLootSnapshotApplied -= OnOwnerStolenLootSnapshotApplied;
+            NetworkSessionProgressAuthority.OnOwnerStolenLootSnapshotApplied += OnOwnerStolenLootSnapshotApplied;
+
+            if (IsNonAuthoritativeNetworkClient()
+                && NetworkSessionProgressAuthority.TryGetLocalRequester(out NetworkSessionProgressAuthority authority))
+            {
+                authority.RequestRefreshStolenLootSnapshot();
+            }
+
             StartWorldViewPresentation();
         }
 
@@ -159,6 +178,14 @@ namespace Game.Minigames
             {
                 ReleaseMinigameCursorAuthority();
             }
+
+            NetworkSessionProgressAuthority.OnStolenLootSellItemResponse -= OnStolenLootSellItemResponse;
+            NetworkSessionProgressAuthority.OnUpgradePurchaseResponse -= OnUpgradePurchaseResponse;
+            NetworkSessionProgressAuthority.OnOwnerStolenLootSnapshotApplied -= OnOwnerStolenLootSnapshotApplied;
+            _awaitingNetworkSellResponse = false;
+            _pendingNetworkSellItemId = string.Empty;
+            _awaitingNetworkUpgradeResponse = false;
+            _pendingNetworkUpgradeId = string.Empty;
 
             TearDownWorldViewPresentation();
 
@@ -254,6 +281,26 @@ namespace Game.Minigames
                 return;
             }
 
+            if (IsNonAuthoritativeNetworkClient())
+            {
+                if (_awaitingNetworkSellResponse)
+                {
+                    return;
+                }
+
+                if (!NetworkSessionProgressAuthority.TryGetLocalRequester(out NetworkSessionProgressAuthority authority))
+                {
+                    UpdateStatusMessage("Sell unavailable.");
+                    return;
+                }
+
+                _awaitingNetworkSellResponse = true;
+                _pendingNetworkSellItemId = string.IsNullOrWhiteSpace(itemId) ? string.Empty : itemId.Trim();
+                authority.RequestSellTrackedStolenLootItemUnit(_pendingNetworkSellItemId);
+                UpdateStatusMessage("Selling...");
+                return;
+            }
+
             string ownerPlayerId = PlayerInventoryAuthority.GetLocalOwnerPlayerId();
             bool success = gameManager.TrySellTrackedStolenLootItemUnitInHome(
                 itemId,
@@ -276,12 +323,73 @@ namespace Game.Minigames
             RefreshUiRuntimeState();
         }
 
+        private void OnStolenLootSellItemResponse(NetworkSessionProgressAuthority.StolenLootSellItemResponse response)
+        {
+            if (!_awaitingNetworkSellResponse)
+            {
+                return;
+            }
+
+            string responseItemId = string.IsNullOrWhiteSpace(response.itemId) ? string.Empty : response.itemId.Trim();
+            if (!string.Equals(responseItemId, _pendingNetworkSellItemId, System.StringComparison.Ordinal))
+            {
+                return;
+            }
+
+            _awaitingNetworkSellResponse = false;
+            _pendingNetworkSellItemId = string.Empty;
+
+            string message = response.success && response.payoutAmount > 0
+                ? $"Sold 1 item for ${response.payoutAmount}."
+                : "Sell unavailable.";
+
+            if (!response.success && !string.IsNullOrWhiteSpace(response.reason))
+            {
+                message = response.reason.Trim();
+            }
+
+            EventBus.Publish(new PlayerFeedbackEvent(message));
+            UpdateStatusMessage(message);
+            RefreshUiRuntimeState();
+        }
+
+        private void OnOwnerStolenLootSnapshotApplied(string ownerKey)
+        {
+            string localOwnerPlayerId = PlayerInventoryAuthority.GetLocalOwnerPlayerId();
+            if (!string.Equals(ownerKey, localOwnerPlayerId, System.StringComparison.Ordinal))
+            {
+                return;
+            }
+
+            RefreshUiRuntimeState();
+        }
+
         private void HandleUpgradeRequested(string upgradeId)
         {
             GameManager gameManager = GameManager.Instance;
             if (gameManager == null)
             {
                 UpdateStatusMessage("Upgrade unavailable.");
+                return;
+            }
+
+            if (IsNonAuthoritativeNetworkClient())
+            {
+                if (_awaitingNetworkUpgradeResponse)
+                {
+                    return;
+                }
+
+                if (!NetworkSessionProgressAuthority.TryGetLocalRequester(out NetworkSessionProgressAuthority authority))
+                {
+                    UpdateStatusMessage("Upgrade unavailable.");
+                    return;
+                }
+
+                _awaitingNetworkUpgradeResponse = true;
+                _pendingNetworkUpgradeId = string.IsNullOrWhiteSpace(upgradeId) ? string.Empty : upgradeId.Trim();
+                authority.RequestPurchaseUpgrade(_pendingNetworkUpgradeId);
+                UpdateStatusMessage("Purchasing...");
                 return;
             }
 
@@ -299,6 +407,40 @@ namespace Game.Minigames
                 message = string.IsNullOrWhiteSpace(unavailableReason)
                     ? $"{displayName} unavailable."
                     : $"{displayName} unavailable: {unavailableReason}";
+            }
+
+            EventBus.Publish(new PlayerFeedbackEvent(message));
+            UpdateStatusMessage(message);
+            RefreshUiRuntimeState();
+        }
+
+        private void OnUpgradePurchaseResponse(NetworkSessionProgressAuthority.UpgradePurchaseResponse response)
+        {
+            if (!_awaitingNetworkUpgradeResponse)
+            {
+                return;
+            }
+
+            string responseUpgradeId = string.IsNullOrWhiteSpace(response.upgradeId) ? string.Empty : response.upgradeId.Trim();
+            if (!string.Equals(responseUpgradeId, _pendingNetworkUpgradeId, System.StringComparison.Ordinal))
+            {
+                return;
+            }
+
+            _awaitingNetworkUpgradeResponse = false;
+            _pendingNetworkUpgradeId = string.Empty;
+
+            string displayName = GetUpgradeDisplayName(responseUpgradeId);
+            string message;
+            if (response.success)
+            {
+                message = $"{displayName} upgraded to Tier {response.resultingTier} (-${response.spentCurrency}).";
+            }
+            else
+            {
+                message = string.IsNullOrWhiteSpace(response.reason)
+                    ? $"{displayName} unavailable."
+                    : $"{displayName} unavailable: {response.reason.Trim()}";
             }
 
             EventBus.Publish(new PlayerFeedbackEvent(message));
@@ -390,6 +532,12 @@ namespace Game.Minigames
             }
 
             return string.Empty;
+        }
+
+        private static bool IsNonAuthoritativeNetworkClient()
+        {
+            NetworkManager manager = NetworkManager.Singleton;
+            return manager != null && manager.IsListening && manager.IsClient && !manager.IsServer;
         }
 
         private void RequestFinish(MinigameResult result)

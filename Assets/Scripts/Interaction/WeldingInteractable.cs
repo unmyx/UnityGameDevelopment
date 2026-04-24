@@ -3,8 +3,10 @@ using System;
 using Game.Core;
 using Game.Core.Events;
 using Game.Minigames;
+using Game.Networking;
 using Game.Player;
 using TMPro;
+using Unity.Netcode;
 using UnityEngine;
 using UnityEngine.UI;
 
@@ -16,6 +18,7 @@ namespace Game.Interaction
     public class WeldingInteractable : MinigameInteractableBase
     {
         private const string DailyTaskType = "welding";
+        private const string MinigameId = "welding";
 
         [SerializeField] private Canvas _minigameCanvas;
 
@@ -82,6 +85,32 @@ namespace Game.Interaction
         [SerializeField]
         private bool _showWorldAnchorMarkers = true;
 
+        private bool _awaitingNetworkStartApproval;
+        private string _pendingNetworkStartTaskKey = string.Empty;
+        private bool _hasActiveWeldingSession;
+        private int _activeWeldingSessionToken;
+        private string _activeWeldingTaskKey = string.Empty;
+        private bool _hasSubmittedWeldingResult;
+
+        private void OnEnable()
+        {
+            NetworkSessionProgressAuthority.OnJobInteractableStartResponse += OnJobInteractableStartResponse;
+            NetworkSessionProgressAuthority.OnWeldingResultResolutionResponse += OnWeldingResultResolutionResponse;
+            EventBus.Subscribe<MinigameEndedEvent>(OnMinigameEnded);
+            EventBus.Subscribe<MinigameCancelledEvent>(OnMinigameCancelled);
+        }
+
+        private void OnDisable()
+        {
+            NetworkSessionProgressAuthority.OnJobInteractableStartResponse -= OnJobInteractableStartResponse;
+            NetworkSessionProgressAuthority.OnWeldingResultResolutionResponse -= OnWeldingResultResolutionResponse;
+            EventBus.Unsubscribe<MinigameEndedEvent>(OnMinigameEnded);
+            EventBus.Unsubscribe<MinigameCancelledEvent>(OnMinigameCancelled);
+            _awaitingNetworkStartApproval = false;
+            _pendingNetworkStartTaskKey = string.Empty;
+            ClearActiveWeldingSession();
+        }
+
         protected override MinigameData BuildMinigameData()
         {
             if (!TryResolveRequiredReferences(out string validationError))
@@ -92,7 +121,7 @@ namespace Game.Interaction
 
             MinigameData data = new MinigameData
             {
-                minigameId = "welding",
+                minigameId = MinigameId,
                 displayName = "Weld the Metal",
                 timeLimit = 0f
             };
@@ -132,9 +161,28 @@ namespace Game.Interaction
 
         protected override void StartMinigame(MinigameData data)
         {
-            GameManager gameManager = GameManager.Instance;
             string taskKey = GetDailyTaskLocationKey();
 
+            if (IsNetworkSession())
+            {
+                if (_awaitingNetworkStartApproval)
+                {
+                    return;
+                }
+
+                if (!NetworkSessionProgressAuthority.TryGetLocalRequester(out NetworkSessionProgressAuthority authority))
+                {
+                    EventBus.Publish(new PlayerFeedbackEvent("Task is unavailable right now."));
+                    return;
+                }
+
+                _awaitingNetworkStartApproval = true;
+                _pendingNetworkStartTaskKey = taskKey;
+                authority.RequestJobInteractableStart(DailyTaskType, taskKey, MinigameId);
+                return;
+            }
+
+            GameManager gameManager = GameManager.Instance;
             if (gameManager != null
                 && !gameManager.CanLaunchTaskAtLocation(DailyTaskType, taskKey, out string blockedReason))
             {
@@ -151,8 +199,142 @@ namespace Game.Interaction
                 gameManager.RegisterDailyTaskLaunchContext(DailyTaskType, taskKey);
             }
 
+            StartLocalWeldingMinigame(data);
+        }
+
+        private void OnJobInteractableStartResponse(NetworkSessionProgressAuthority.JobInteractableStartResponse response)
+        {
+            if (!_awaitingNetworkStartApproval)
+            {
+                return;
+            }
+
+            if (!string.Equals(response.taskType, DailyTaskType, StringComparison.Ordinal)
+                || !string.Equals(response.minigameId, MinigameId, StringComparison.Ordinal)
+                || !string.Equals(response.taskKey, _pendingNetworkStartTaskKey, StringComparison.Ordinal))
+            {
+                return;
+            }
+
+            string requestedTaskKey = _pendingNetworkStartTaskKey;
+            _awaitingNetworkStartApproval = false;
+            _pendingNetworkStartTaskKey = string.Empty;
+
+            if (!response.approved)
+            {
+                if (!string.IsNullOrWhiteSpace(response.reason))
+                {
+                    EventBus.Publish(new PlayerFeedbackEvent(response.reason));
+                }
+                ClearActiveWeldingSession();
+                return;
+            }
+
+            int sessionToken = response.weldingSessionToken;
+            string canonicalTaskKey = string.IsNullOrWhiteSpace(response.canonicalTaskKey)
+                ? requestedTaskKey
+                : response.canonicalTaskKey.Trim();
+            if (IsNetworkSession())
+            {
+                if (sessionToken <= 0 || string.IsNullOrWhiteSpace(canonicalTaskKey))
+                {
+                    EventBus.Publish(new PlayerFeedbackEvent("Task start approval was invalid."));
+                    ClearActiveWeldingSession();
+                    return;
+                }
+
+                _hasActiveWeldingSession = true;
+                _activeWeldingSessionToken = sessionToken;
+                _activeWeldingTaskKey = canonicalTaskKey;
+                _hasSubmittedWeldingResult = false;
+            }
+
+            MinigameData approvedData = BuildMinigameData();
+            if (approvedData == null || string.IsNullOrWhiteSpace(approvedData.minigameId))
+            {
+                ClearActiveWeldingSession();
+                return;
+            }
+
+            StartLocalWeldingMinigame(approvedData);
+        }
+
+        private void StartLocalWeldingMinigame(MinigameData data)
+        {
             string ownerPlayerId = PlayerInventoryAuthority.GetLocalOwnerPlayerId();
             MinigameManager.Instance?.StartMinigame<WeldingFillMinigame>(data, ownerPlayerId);
+        }
+
+        private void OnWeldingResultResolutionResponse(NetworkSessionProgressAuthority.WeldingResultResolutionResponse response)
+        {
+            if (!_hasActiveWeldingSession)
+            {
+                return;
+            }
+
+            if (response.sessionToken != _activeWeldingSessionToken
+                || !string.Equals(response.taskKey ?? string.Empty, _activeWeldingTaskKey ?? string.Empty, StringComparison.Ordinal))
+            {
+                return;
+            }
+
+            if (!response.accepted && !string.IsNullOrWhiteSpace(response.reason))
+            {
+                EventBus.Publish(new PlayerFeedbackEvent(response.reason));
+            }
+
+            ClearActiveWeldingSession();
+        }
+
+        private void OnMinigameEnded(MinigameEndedEvent evt)
+        {
+            TrySubmitWeldingTerminalResult(evt.MinigameId, evt.OwnerPlayerId, evt.Result);
+        }
+
+        private void OnMinigameCancelled(MinigameCancelledEvent evt)
+        {
+            TrySubmitWeldingTerminalResult(evt.MinigameId, evt.OwnerPlayerId, evt.Result);
+        }
+
+        private void TrySubmitWeldingTerminalResult(string minigameId, string ownerPlayerId, MinigameResult result)
+        {
+            if (!_hasActiveWeldingSession || _hasSubmittedWeldingResult || !IsNetworkSession())
+            {
+                return;
+            }
+
+            if (!string.Equals(minigameId, MinigameId, StringComparison.Ordinal))
+            {
+                return;
+            }
+
+            string localOwnerId = PlayerInventoryAuthority.GetLocalOwnerPlayerId();
+            if (!string.Equals(ownerPlayerId, localOwnerId, StringComparison.Ordinal))
+            {
+                return;
+            }
+
+            if (!NetworkSessionProgressAuthority.TryGetLocalRequester(out NetworkSessionProgressAuthority authority))
+            {
+                return;
+            }
+
+            _hasSubmittedWeldingResult = true;
+            authority.RequestResolveWeldingResult(_activeWeldingSessionToken, _activeWeldingTaskKey, result);
+        }
+
+        private void ClearActiveWeldingSession()
+        {
+            _hasActiveWeldingSession = false;
+            _activeWeldingSessionToken = 0;
+            _activeWeldingTaskKey = string.Empty;
+            _hasSubmittedWeldingResult = false;
+        }
+
+        private static bool IsNetworkSession()
+        {
+            NetworkManager manager = NetworkManager.Singleton;
+            return manager != null && manager.IsListening;
         }
 
         public string GetDailyTaskLocationKey()

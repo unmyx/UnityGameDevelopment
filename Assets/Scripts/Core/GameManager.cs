@@ -3,12 +3,14 @@ using UnityEngine.SceneManagement;
 using Game.Inventory;
 using Game.Interaction;
 using Game.Minigames;
+using Game.Networking;
 using Game.UI;
 using Game.Player;
 using Game.Core.Events;
 using System;
 using System.Collections;
 using System.Collections.Generic;
+using Unity.Netcode;
 
 namespace Game.Core
 {
@@ -59,11 +61,15 @@ namespace Game.Core
         [Serializable]
         private class StolenLootTrackerEntry
         {
+            public string ownerKey;
             public string itemId;
             public int count;
 
-            public StolenLootTrackerEntry(string itemId, int count)
+            public StolenLootTrackerEntry(string ownerKey, string itemId, int count)
             {
+                this.ownerKey = string.IsNullOrWhiteSpace(ownerKey)
+                    ? PlayerContextRegistry.DefaultLocalPlayerId
+                    : ownerKey.Trim();
                 this.itemId = itemId;
                 this.count = Mathf.Max(0, count);
             }
@@ -360,7 +366,10 @@ namespace Game.Core
         private void Update()
         {
             _currentStateImplementation?.OnStateUpdate();
-            TickWorkdayRuntime();
+            if (!IsNonAuthoritativeNetworkClient())
+            {
+                TickWorkdayRuntime();
+            }
         }
 
         private void OnSceneLoaded(Scene scene, LoadSceneMode mode)
@@ -995,6 +1004,11 @@ namespace Game.Core
 
         public void EnsureDailyAssignmentsForCurrentWorkday()
         {
+            if (IsNonAuthoritativeNetworkClient())
+            {
+                return;
+            }
+
             if (_currentState != GameState.FreePlay || _currentRunPhase != RunPhase.Work)
             {
                 return;
@@ -1049,6 +1063,11 @@ namespace Game.Core
 
         public bool TryCompleteAssignedDailyTask(string taskType, string taskKey)
         {
+            if (IsNonAuthoritativeNetworkClient())
+            {
+                return false;
+            }
+
             if (!HasDailyTaskAssignmentsForCurrentWorkday())
             {
                 return false;
@@ -1089,6 +1108,11 @@ namespace Game.Core
 
         public bool TryConsumeDailyTaskRewardEligibility(string minigameId)
         {
+            if (IsNonAuthoritativeNetworkClient())
+            {
+                return false;
+            }
+
             string normalizedType = NormalizeTaskType(minigameId);
             if (!IsRewardGatedDailyTaskType(normalizedType))
             {
@@ -1122,8 +1146,31 @@ namespace Game.Core
 
         public void RegisterDailyTaskLaunchContext(string taskType, string taskKey)
         {
-            _lastLaunchedDailyTaskType = NormalizeTaskType(taskType);
-            _lastLaunchedDailyTaskKey = NormalizeTaskKey(taskKey);
+            if (IsNonAuthoritativeNetworkClient())
+            {
+                if (NetworkSessionProgressAuthority.TryGetLocalRequester(out NetworkSessionProgressAuthority authority))
+                {
+                    authority.RequestRegisterDailyTaskLaunchContext(taskType, taskKey);
+                }
+                return;
+            }
+
+            string normalizedType = NormalizeTaskType(taskType);
+            string normalizedKey = NormalizeTaskKey(taskKey);
+            if (string.IsNullOrEmpty(normalizedType) || string.IsNullOrEmpty(normalizedKey))
+            {
+                ClearPendingDailyTaskLaunchContext();
+                return;
+            }
+
+            if (!CanLaunchTaskAtLocation(normalizedType, normalizedKey, out _))
+            {
+                ClearPendingDailyTaskLaunchContext();
+                return;
+            }
+
+            _lastLaunchedDailyTaskType = normalizedType;
+            _lastLaunchedDailyTaskKey = normalizedKey;
         }
 
         public bool CanLaunchTaskAtLocation(string taskType, string taskKey, out string reason)
@@ -1341,6 +1388,130 @@ namespace Game.Core
             }
         }
 
+        public void ApplyNetworkProgressScalarState(
+            int currentDay,
+            int runPhase,
+            bool workdayCompleted,
+            float currentWorkHour,
+            int nextTaskWaveIndex,
+            bool runFailed)
+        {
+            _currentDay = Mathf.Max(1, currentDay);
+            _currentRunPhase = IsValidRunPhase(runPhase) ? (RunPhase)runPhase : RunPhase.Work;
+            _workdayCompleted = workdayCompleted;
+            _currentWorkHour = Mathf.Clamp(currentWorkHour, DefaultWorkdayStartHour, DefaultWorkdayEndHour);
+            _nextTaskWaveIndex = Mathf.Max(0, nextTaskWaveIndex);
+            _runFailed = runFailed || _currentRunPhase == RunPhase.GameOver;
+            if (_runFailed && _currentRunPhase != RunPhase.GameOver)
+            {
+                _currentRunPhase = RunPhase.GameOver;
+            }
+        }
+
+        public void ApplyNetworkEconomyScalarState(int currency, int dayWorkEarnings)
+        {
+            int normalizedCurrency = currency;
+            int normalizedDayWorkEarnings = Mathf.Max(0, dayWorkEarnings);
+
+            if (_currency != normalizedCurrency)
+            {
+                _currency = normalizedCurrency;
+                EventBus.Publish(new CurrencyChangedEvent(_currency));
+            }
+
+            if (_dayWorkEarnings != normalizedDayWorkEarnings)
+            {
+                _dayWorkEarnings = normalizedDayWorkEarnings;
+                EventBus.Publish(new DayWorkEarningsChangedEvent(_dayWorkEarnings));
+            }
+        }
+
+        public void ApplyNetworkProgressComplexState(
+            List<DailyTaskAssignmentData> dailyTaskAssignments,
+            List<GeneratedTaskWaveData> generatedTaskWaves,
+            List<string> unlockedTaskKeys,
+            List<ToolDataEntry> ownedTools)
+        {
+            _dailyTaskAssignments.Clear();
+            if (dailyTaskAssignments != null)
+            {
+                for (int i = 0; i < dailyTaskAssignments.Count; i++)
+                {
+                    DailyTaskAssignmentData saved = dailyTaskAssignments[i];
+                    if (saved == null)
+                    {
+                        continue;
+                    }
+
+                    string normalizedType = NormalizeTaskType(saved.taskType);
+                    string normalizedKey = NormalizeTaskKey(saved.taskKey);
+                    if (string.IsNullOrEmpty(normalizedType) || string.IsNullOrEmpty(normalizedKey))
+                    {
+                        continue;
+                    }
+
+                    DailyTaskAssignment restored = new DailyTaskAssignment(normalizedType, normalizedKey)
+                    {
+                        isCompleted = saved.isCompleted
+                    };
+                    _dailyTaskAssignments.Add(restored);
+                }
+            }
+
+            _dailyTaskAssignmentDay = _dailyTaskAssignments.Count > 0 ? _currentDay : -1;
+            _generatedTaskWaves.Clear();
+            _unlockedTaskKeys.Clear();
+
+            if (generatedTaskWaves != null)
+            {
+                for (int i = 0; i < generatedTaskWaves.Count; i++)
+                {
+                    GeneratedTaskWaveData savedWave = generatedTaskWaves[i];
+                    if (savedWave == null)
+                    {
+                        continue;
+                    }
+
+                    GeneratedTaskWave runtimeWave = new GeneratedTaskWave
+                    {
+                        unlockHour = Mathf.Clamp(savedWave.unlockHour, DefaultWorkdayStartHour, DefaultWorkdayEndHour),
+                        taskKeys = new List<string>()
+                    };
+
+                    if (savedWave.taskKeys != null)
+                    {
+                        for (int k = 0; k < savedWave.taskKeys.Count; k++)
+                        {
+                            string normalizedKey = NormalizeTaskKey(savedWave.taskKeys[k]);
+                            if (!string.IsNullOrEmpty(normalizedKey) && !runtimeWave.taskKeys.Contains(normalizedKey))
+                            {
+                                runtimeWave.taskKeys.Add(normalizedKey);
+                            }
+                        }
+                    }
+
+                    _generatedTaskWaves.Add(runtimeWave);
+                }
+            }
+
+            if (unlockedTaskKeys != null)
+            {
+                for (int i = 0; i < unlockedTaskKeys.Count; i++)
+                {
+                    AddUnlockedTaskKey(unlockedTaskKeys[i]);
+                }
+            }
+
+            if (_nextTaskWaveIndex > _generatedTaskWaves.Count)
+            {
+                _nextTaskWaveIndex = _generatedTaskWaves.Count;
+            }
+
+            _workdayRuntimeInitialized = _generatedTaskWaves.Count > 0 || _unlockedTaskKeys.Count > 0;
+            RestoreOwnedToolUpgradesFromSave(ownedTools);
+            ClearPendingDailyTaskLaunchContext();
+        }
+
         public bool TryRegisterStolenLootPickup(string itemId)
         {
             return TryRegisterStolenLootPickup(itemId, PlayerInventoryAuthority.GetLocalOwnerPlayerId());
@@ -1349,6 +1520,7 @@ namespace Game.Core
         public bool TryRegisterStolenLootPickup(string itemId, string ownerPlayerId)
         {
             ValidateLocalOwnerStoragePath(ownerPlayerId, nameof(TryRegisterStolenLootPickup));
+            string normalizedOwnerKey = NormalizeOwnerKey(ownerPlayerId);
             string normalizedItemId = NormalizeStolenLootItemId(itemId);
             if (string.IsNullOrEmpty(normalizedItemId))
             {
@@ -1368,6 +1540,11 @@ namespace Game.Core
                     continue;
                 }
 
+                if (!string.Equals(entry.ownerKey, normalizedOwnerKey, StringComparison.Ordinal))
+                {
+                    continue;
+                }
+
                 if (!string.Equals(entry.itemId, normalizedItemId, StringComparison.Ordinal))
                 {
                     continue;
@@ -1377,7 +1554,7 @@ namespace Game.Core
                 return true;
             }
 
-            _stolenLootThisDay.Add(new StolenLootTrackerEntry(normalizedItemId, 1));
+            _stolenLootThisDay.Add(new StolenLootTrackerEntry(normalizedOwnerKey, normalizedItemId, 1));
             return true;
         }
 
@@ -1406,6 +1583,7 @@ namespace Game.Core
         public int GetStolenLootCountForItem(string itemId, string ownerPlayerId)
         {
             ValidateLocalOwnerStoragePath(ownerPlayerId, nameof(GetStolenLootCountForItem));
+            string normalizedOwnerKey = NormalizeOwnerKey(ownerPlayerId);
             string normalizedItemId = NormalizeStolenLootItemId(itemId);
             if (string.IsNullOrEmpty(normalizedItemId))
             {
@@ -1416,6 +1594,11 @@ namespace Game.Core
             {
                 StolenLootTrackerEntry entry = _stolenLootThisDay[i];
                 if (entry == null)
+                {
+                    continue;
+                }
+
+                if (!string.Equals(entry.ownerKey, normalizedOwnerKey, StringComparison.Ordinal))
                 {
                     continue;
                 }
@@ -1437,6 +1620,7 @@ namespace Game.Core
         public bool TryUnregisterStolenLootForDrop(string itemId, string ownerPlayerId, int amount = 1)
         {
             ValidateLocalOwnerStoragePath(ownerPlayerId, nameof(TryUnregisterStolenLootForDrop));
+            string normalizedOwnerKey = NormalizeOwnerKey(ownerPlayerId);
             string normalizedItemId = NormalizeStolenLootItemId(itemId);
             if (string.IsNullOrEmpty(normalizedItemId) || amount <= 0)
             {
@@ -1447,7 +1631,9 @@ namespace Game.Core
             for (int i = _stolenLootThisDay.Count - 1; i >= 0; i--)
             {
                 StolenLootTrackerEntry entry = _stolenLootThisDay[i];
-                if (entry == null || !string.Equals(entry.itemId, normalizedItemId, StringComparison.Ordinal))
+                if (entry == null
+                    || !string.Equals(entry.ownerKey, normalizedOwnerKey, StringComparison.Ordinal)
+                    || !string.Equals(entry.itemId, normalizedItemId, StringComparison.Ordinal))
                 {
                     continue;
                 }
@@ -1484,11 +1670,17 @@ namespace Game.Core
         public List<StolenLootEntryData> GetStolenLootThisDaySnapshot(string ownerPlayerId)
         {
             ValidateLocalOwnerStoragePath(ownerPlayerId, nameof(GetStolenLootThisDaySnapshot));
+            string normalizedOwnerKey = NormalizeOwnerKey(ownerPlayerId);
             List<StolenLootEntryData> snapshot = new List<StolenLootEntryData>();
             for (int i = 0; i < _stolenLootThisDay.Count; i++)
             {
                 StolenLootTrackerEntry entry = _stolenLootThisDay[i];
                 if (entry == null)
+                {
+                    continue;
+                }
+
+                if (!string.Equals(entry.ownerKey, normalizedOwnerKey, StringComparison.Ordinal))
                 {
                     continue;
                 }
@@ -1502,6 +1694,37 @@ namespace Game.Core
 
                 snapshot.Add(new StolenLootEntryData
                 {
+                    ownerKey = normalizedOwnerKey,
+                    itemId = normalizedItemId,
+                    count = count
+                });
+            }
+
+            return snapshot;
+        }
+
+        public List<StolenLootEntryData> GetStolenLootThisDaySnapshotForAllOwners()
+        {
+            List<StolenLootEntryData> snapshot = new List<StolenLootEntryData>();
+            for (int i = 0; i < _stolenLootThisDay.Count; i++)
+            {
+                StolenLootTrackerEntry entry = _stolenLootThisDay[i];
+                if (entry == null)
+                {
+                    continue;
+                }
+
+                string normalizedOwnerKey = NormalizeOwnerKey(entry.ownerKey);
+                string normalizedItemId = NormalizeStolenLootItemId(entry.itemId);
+                int count = Mathf.Max(0, entry.count);
+                if (string.IsNullOrEmpty(normalizedItemId) || count <= 0)
+                {
+                    continue;
+                }
+
+                snapshot.Add(new StolenLootEntryData
+                {
+                    ownerKey = normalizedOwnerKey,
                     itemId = normalizedItemId,
                     count = count
                 });
@@ -1517,8 +1740,9 @@ namespace Game.Core
 
         public List<StolenLootEntryData> ConsumeDayStolenLoot(string ownerPlayerId)
         {
+            string normalizedOwnerKey = NormalizeOwnerKey(ownerPlayerId);
             List<StolenLootEntryData> consumedSnapshot = GetStolenLootThisDaySnapshot(ownerPlayerId);
-            ClearStolenLootThisDay();
+            ClearStolenLootThisDay(normalizedOwnerKey);
             return consumedSnapshot;
         }
 
@@ -1533,6 +1757,7 @@ namespace Game.Core
         public bool TrySellTrackedStolenLootInHome(string ownerPlayerId, out int soldItemCount, out int payoutAmount)
         {
             ValidateLocalOwnerStoragePath(ownerPlayerId, nameof(TrySellTrackedStolenLootInHome));
+            bool isRemoteNetworkOwner = IsRemoteNetworkOwnerOnAuthoritativeServer(ownerPlayerId);
             soldItemCount = 0;
             payoutAmount = 0;
 
@@ -1577,7 +1802,9 @@ namespace Game.Core
                     continue;
                 }
 
-                int removedCount = _inventorySystem.RemoveItemsByItemId(normalizedItemId, requestedCount, ownerPlayerId);
+                int removedCount = isRemoteNetworkOwner
+                    ? requestedCount
+                    : _inventorySystem.RemoveItemsByItemId(normalizedItemId, requestedCount, ownerPlayerId);
                 if (removedCount > 0)
                 {
                     totalRemoved += removedCount;
@@ -1599,7 +1826,7 @@ namespace Game.Core
                 }
             }
 
-            RestoreStolenLootThisDayFromSave(remainingTrackedLoot);
+            RestoreStolenLootThisDayFromSave(remainingTrackedLoot, ownerPlayerId);
 
             if (totalPayout > 0)
             {
@@ -1630,6 +1857,7 @@ namespace Game.Core
             out int remainingTrackedCount)
         {
             ValidateLocalOwnerStoragePath(ownerPlayerId, nameof(TrySellTrackedStolenLootItemUnitInHome));
+            bool isRemoteNetworkOwner = IsRemoteNetworkOwnerOnAuthoritativeServer(ownerPlayerId);
             payoutAmount = 0;
             remainingTrackedCount = 0;
 
@@ -1666,7 +1894,9 @@ namespace Game.Core
                 return false;
             }
 
-            int removedCount = _inventorySystem.RemoveItemsByItemId(normalizedItemId, 1, ownerPlayerId);
+            int removedCount = isRemoteNetworkOwner
+                ? 1
+                : _inventorySystem.RemoveItemsByItemId(normalizedItemId, 1, ownerPlayerId);
             if (removedCount <= 0)
             {
                 return false;
@@ -1713,7 +1943,7 @@ namespace Game.Core
                 });
             }
 
-            RestoreStolenLootThisDayFromSave(updatedTrackedLoot);
+            RestoreStolenLootThisDayFromSave(updatedTrackedLoot, ownerPlayerId);
             remainingTrackedCount = GetStolenLootCountForItem(normalizedItemId, ownerPlayerId);
             return true;
         }
@@ -1726,6 +1956,7 @@ namespace Game.Core
         public List<SellableStolenLootEntryData> GetSellableStolenLootEntriesInHome(string ownerPlayerId)
         {
             ValidateLocalOwnerStoragePath(ownerPlayerId, nameof(GetSellableStolenLootEntriesInHome));
+            bool isRemoteNetworkOwner = IsRemoteNetworkOwnerOnAuthoritativeServer(ownerPlayerId);
             List<SellableStolenLootEntryData> entries = new List<SellableStolenLootEntryData>();
             List<StolenLootEntryData> trackedLootSnapshot = GetStolenLootThisDaySnapshot(ownerPlayerId);
             if (trackedLootSnapshot == null || trackedLootSnapshot.Count <= 0)
@@ -1733,38 +1964,41 @@ namespace Game.Core
                 return entries;
             }
 
-            if (_inventorySystem == null)
+            if (!isRemoteNetworkOwner && _inventorySystem == null)
             {
                 RefreshRuntimeBindings();
             }
 
-            if (_inventorySystem == null)
+            if (!isRemoteNetworkOwner && _inventorySystem == null)
             {
                 return entries;
             }
 
             Dictionary<string, int> inventoryCountsByItemId = new Dictionary<string, int>(StringComparer.Ordinal);
-            List<InventoryItem> inventoryItems = _inventorySystem.GetAllItems();
-            for (int i = 0; i < inventoryItems.Count; i++)
+            if (!isRemoteNetworkOwner)
             {
-                InventoryItem inventoryItem = inventoryItems[i];
-                if (inventoryItem == null || !inventoryItem.IsValid())
+                List<InventoryItem> inventoryItems = _inventorySystem.GetAllItems();
+                for (int i = 0; i < inventoryItems.Count; i++)
                 {
-                    continue;
-                }
+                    InventoryItem inventoryItem = inventoryItems[i];
+                    if (inventoryItem == null || !inventoryItem.IsValid())
+                    {
+                        continue;
+                    }
 
-                string normalizedItemId = NormalizeStolenLootItemId(inventoryItem.ItemId);
-                if (string.IsNullOrEmpty(normalizedItemId))
-                {
-                    continue;
-                }
+                    string normalizedItemId = NormalizeStolenLootItemId(inventoryItem.ItemId);
+                    if (string.IsNullOrEmpty(normalizedItemId))
+                    {
+                        continue;
+                    }
 
-                if (!inventoryCountsByItemId.TryGetValue(normalizedItemId, out int currentCount))
-                {
-                    currentCount = 0;
-                }
+                    if (!inventoryCountsByItemId.TryGetValue(normalizedItemId, out int currentCount))
+                    {
+                        currentCount = 0;
+                    }
 
-                inventoryCountsByItemId[normalizedItemId] = currentCount + 1;
+                    inventoryCountsByItemId[normalizedItemId] = currentCount + 1;
+                }
             }
 
             for (int i = 0; i < trackedLootSnapshot.Count; i++)
@@ -1782,7 +2016,9 @@ namespace Game.Core
                     continue;
                 }
 
-                if (!inventoryCountsByItemId.TryGetValue(normalizedItemId, out int inventoryCount) || inventoryCount <= 0)
+                int inventoryCount = trackedCount;
+                if (!isRemoteNetworkOwner
+                    && (!inventoryCountsByItemId.TryGetValue(normalizedItemId, out inventoryCount) || inventoryCount <= 0))
                 {
                     continue;
                 }
@@ -1834,7 +2070,13 @@ namespace Game.Core
 
         public void RestoreStolenLootThisDayFromSave(List<StolenLootEntryData> savedEntries)
         {
-            ClearStolenLootThisDay();
+            RestoreStolenLootThisDayFromSave(savedEntries, PlayerContextRegistry.DefaultLocalPlayerId);
+        }
+
+        public void RestoreStolenLootThisDayFromSave(List<StolenLootEntryData> savedEntries, string ownerPlayerId)
+        {
+            string normalizedOwnerKey = NormalizeOwnerKey(ownerPlayerId);
+            ClearStolenLootThisDay(normalizedOwnerKey);
 
             if (savedEntries == null)
             {
@@ -1845,6 +2087,14 @@ namespace Game.Core
             {
                 StolenLootEntryData savedEntry = savedEntries[i];
                 if (savedEntry == null)
+                {
+                    continue;
+                }
+
+                string entryOwnerKey = string.IsNullOrWhiteSpace(savedEntry.ownerKey)
+                    ? normalizedOwnerKey
+                    : NormalizeOwnerKey(savedEntry.ownerKey);
+                if (!string.Equals(entryOwnerKey, normalizedOwnerKey, StringComparison.Ordinal))
                 {
                     continue;
                 }
@@ -1865,6 +2115,11 @@ namespace Game.Core
                         continue;
                     }
 
+                    if (!string.Equals(existingEntry.ownerKey, normalizedOwnerKey, StringComparison.Ordinal))
+                    {
+                        continue;
+                    }
+
                     if (!string.Equals(existingEntry.itemId, normalizedItemId, StringComparison.Ordinal))
                     {
                         continue;
@@ -1877,13 +2132,70 @@ namespace Game.Core
 
                 if (!alreadyPresent)
                 {
-                    _stolenLootThisDay.Add(new StolenLootTrackerEntry(normalizedItemId, count));
+                    _stolenLootThisDay.Add(new StolenLootTrackerEntry(normalizedOwnerKey, normalizedItemId, count));
+                }
+            }
+        }
+
+        public void RestoreStolenLootThisDayFromSaveForAllOwners(List<StolenLootEntryData> savedEntries)
+        {
+            ClearStolenLootThisDay();
+
+            if (savedEntries == null)
+            {
+                return;
+            }
+
+            for (int i = 0; i < savedEntries.Count; i++)
+            {
+                StolenLootEntryData savedEntry = savedEntries[i];
+                if (savedEntry == null)
+                {
+                    continue;
+                }
+
+                string normalizedOwnerKey = NormalizeOwnerKey(savedEntry.ownerKey);
+                string normalizedItemId = NormalizeStolenLootItemId(savedEntry.itemId);
+                int count = Mathf.Max(0, savedEntry.count);
+                if (string.IsNullOrEmpty(normalizedItemId) || count <= 0)
+                {
+                    continue;
+                }
+
+                bool alreadyPresent = false;
+                for (int j = 0; j < _stolenLootThisDay.Count; j++)
+                {
+                    StolenLootTrackerEntry existingEntry = _stolenLootThisDay[j];
+                    if (existingEntry == null)
+                    {
+                        continue;
+                    }
+
+                    if (!string.Equals(existingEntry.ownerKey, normalizedOwnerKey, StringComparison.Ordinal)
+                        || !string.Equals(existingEntry.itemId, normalizedItemId, StringComparison.Ordinal))
+                    {
+                        continue;
+                    }
+
+                    existingEntry.count = Mathf.Max(0, existingEntry.count) + count;
+                    alreadyPresent = true;
+                    break;
+                }
+
+                if (!alreadyPresent)
+                {
+                    _stolenLootThisDay.Add(new StolenLootTrackerEntry(normalizedOwnerKey, normalizedItemId, count));
                 }
             }
         }
 
         public bool CompleteWorkdayAndGoHome()
         {
+            if (IsNonAuthoritativeNetworkClient())
+            {
+                return false;
+            }
+
             if (_currentRunPhase != RunPhase.Work)
             {
                 Debug.LogWarning($"[GameManager] Cannot complete workday while in run phase '{_currentRunPhase}'.", this);
@@ -1947,6 +2259,11 @@ namespace Game.Core
 
         public bool StartNextDay()
         {
+            if (IsNonAuthoritativeNetworkClient())
+            {
+                return false;
+            }
+
             if (_currentRunPhase != RunPhase.Home)
             {
                 Debug.LogWarning($"[GameManager] Cannot start next day while in run phase '{_currentRunPhase}'.", this);
@@ -2019,6 +2336,11 @@ namespace Game.Core
 
         public bool TriggerGameOver(string reason = null)
         {
+            if (IsNonAuthoritativeNetworkClient())
+            {
+                return false;
+            }
+
             if (_currentRunPhase != RunPhase.GameOver && IsRunPhaseTransitionBlocked(out string blockReason))
             {
                 Debug.LogWarning(
@@ -2065,6 +2387,14 @@ namespace Game.Core
                 return;
             }
 
+            if (IsNonAuthoritativeNetworkClient())
+            {
+                Debug.LogWarning(
+                    $"[GameManager] Ignored client-side day work earnings mutation (+{amount}) in network session.",
+                    this);
+                return;
+            }
+
             if (_currentRunPhase != RunPhase.Work || _workdayCompleted)
             {
                 Debug.LogWarning(
@@ -2096,12 +2426,28 @@ namespace Game.Core
                 return;
             }
 
+            if (IsNonAuthoritativeNetworkClient())
+            {
+                Debug.LogWarning(
+                    $"[GameManager] Ignored client-side currency mutation ({amount}) in network session.",
+                    this);
+                return;
+            }
+
             _currency += amount;
             EventBus.Publish(new CurrencyChangedEvent(_currency));
         }
 
         public bool TrySpendCurrency(int amount)
         {
+            if (IsNonAuthoritativeNetworkClient())
+            {
+                Debug.LogWarning(
+                    $"[GameManager] Ignored client-side spend request ({amount}) in network session.",
+                    this);
+                return false;
+            }
+
             if (amount <= 0 || _currency < amount)
             {
                 return false;
@@ -2444,6 +2790,11 @@ namespace Game.Core
 
         private void EnsureWorkdayRuntimeInitialized()
         {
+            if (IsNonAuthoritativeNetworkClient())
+            {
+                return;
+            }
+
             if (_currentRunPhase != RunPhase.Work)
             {
                 return;
@@ -2459,6 +2810,11 @@ namespace Game.Core
 
         private void RebuildTaskWaveScheduleForCurrentWorkday()
         {
+            if (IsNonAuthoritativeNetworkClient())
+            {
+                return;
+            }
+
             _generatedTaskWaves.Clear();
             _unlockedTaskKeys.Clear();
             _nextTaskWaveIndex = 0;
@@ -2809,6 +3165,30 @@ namespace Game.Core
                 : itemId.Trim();
         }
 
+        private static string NormalizeOwnerKey(string ownerKey)
+        {
+            return string.IsNullOrWhiteSpace(ownerKey)
+                ? PlayerContextRegistry.DefaultLocalPlayerId
+                : ownerKey.Trim();
+        }
+
+        private static bool IsRemoteNetworkOwnerOnAuthoritativeServer(string ownerKey)
+        {
+            if (!NetworkOwnerKeyUtility.IsNetworkOwnerKey(ownerKey))
+            {
+                return false;
+            }
+
+            NetworkManager manager = NetworkManager.Singleton;
+            if (manager == null || !manager.IsListening || !manager.IsServer)
+            {
+                return false;
+            }
+
+            string localOwnerKey = NetworkOwnerKeyUtility.GetOwnerKeyForSender(manager.LocalClientId);
+            return !string.Equals(NormalizeOwnerKey(ownerKey), localOwnerKey, StringComparison.Ordinal);
+        }
+
         private static string NormalizeUpgradeId(string upgradeId)
         {
             return string.IsNullOrWhiteSpace(upgradeId)
@@ -2818,6 +3198,11 @@ namespace Game.Core
 
         private void ValidateLocalOwnerStoragePath(string ownerPlayerId, string callsite)
         {
+            if (NetworkOwnerKeyUtility.IsNetworkOwnerKey(ownerPlayerId))
+            {
+                return;
+            }
+
             PlayerInventoryAuthority.LogNonLocalOwnerUsage($"GameManager.{callsite}", ownerPlayerId, this);
         }
 
@@ -3003,9 +3388,13 @@ namespace Game.Core
                 return false;
             }
 
+            if (IsNonAuthoritativeNetworkClient())
+            {
+                return true;
+            }
+
             _isRunPhaseSceneRouting = true;
-            SceneManager.LoadScene(targetSceneName);
-            return true;
+            return TryLoadSceneAuthoritatively(targetSceneName);
         }
 
         private bool TryRouteToFailureTerminalScene()
@@ -3032,9 +3421,40 @@ namespace Game.Core
                 return false;
             }
 
+            if (IsNonAuthoritativeNetworkClient())
+            {
+                _hasRoutedAfterFailure = true;
+                return true;
+            }
+
             _hasRoutedAfterFailure = true;
             _isRunPhaseSceneRouting = true;
-            SceneManager.LoadScene(MenuSceneName);
+            return TryLoadSceneAuthoritatively(MenuSceneName);
+        }
+
+        private bool TryLoadSceneAuthoritatively(string targetSceneName)
+        {
+            if (string.IsNullOrWhiteSpace(targetSceneName))
+            {
+                return false;
+            }
+
+            NetworkManager manager = NetworkManager.Singleton;
+            if (manager != null && manager.IsListening)
+            {
+                if (!manager.IsServer)
+                {
+                    return true;
+                }
+
+                if (manager.SceneManager != null && manager.NetworkConfig != null && manager.NetworkConfig.EnableSceneManagement)
+                {
+                    SceneEventProgressStatus status = manager.SceneManager.LoadScene(targetSceneName, LoadSceneMode.Single);
+                    return status == SceneEventProgressStatus.Started || status == SceneEventProgressStatus.SceneEventInProgress;
+                }
+            }
+
+            SceneManager.LoadScene(targetSceneName);
             return true;
         }
 
@@ -3054,6 +3474,25 @@ namespace Game.Core
         private void ClearStolenLootThisDay()
         {
             _stolenLootThisDay.Clear();
+        }
+
+        private void ClearStolenLootThisDay(string ownerKey)
+        {
+            string normalizedOwnerKey = NormalizeOwnerKey(ownerKey);
+            for (int i = _stolenLootThisDay.Count - 1; i >= 0; i--)
+            {
+                StolenLootTrackerEntry entry = _stolenLootThisDay[i];
+                if (entry == null)
+                {
+                    _stolenLootThisDay.RemoveAt(i);
+                    continue;
+                }
+
+                if (string.Equals(entry.ownerKey, normalizedOwnerKey, StringComparison.Ordinal))
+                {
+                    _stolenLootThisDay.RemoveAt(i);
+                }
+            }
         }
 
         private void ClearFailedLieEscalationCountThisDay()
@@ -3093,6 +3532,12 @@ namespace Game.Core
 
             failureReason = string.Empty;
             return false;
+        }
+
+        private static bool IsNonAuthoritativeNetworkClient()
+        {
+            NetworkManager manager = NetworkManager.Singleton;
+            return manager != null && manager.IsListening && manager.IsClient && !manager.IsServer;
         }
 
         private static bool IsValidRunPhase(int runPhaseValue)

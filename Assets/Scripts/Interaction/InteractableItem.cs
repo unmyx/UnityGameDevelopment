@@ -1,8 +1,10 @@
-﻿using UnityEngine;
+using UnityEngine;
 using Game.Inventory;
 using Game.Core;
 using Game.Core.Events;
 using Game.Player;
+using Game.Networking;
+using Unity.Netcode;
 
 namespace Game.Interaction
 {
@@ -94,6 +96,11 @@ namespace Game.Interaction
         public override void Interact()
         {
             if (!CanInteract)
+            {
+                return;
+            }
+
+            if (ShouldDeferToNetworkAuthorityBridge())
             {
                 return;
             }
@@ -224,6 +231,20 @@ namespace Game.Interaction
             return TryGetPersistentCollectibleId(out collectibleId, logWarning: false);
         }
 
+        public bool TryGetNetworkPickupPayload(out string itemId, out bool countsAsStolenLoot)
+        {
+            itemId = string.Empty;
+            countsAsStolenLoot = _countsAsStolenLoot;
+
+            if (_inventoryItem == null || !_inventoryItem.IsValid() || string.IsNullOrWhiteSpace(_inventoryItem.ItemId))
+            {
+                return false;
+            }
+
+            itemId = _inventoryItem.ItemId.Trim();
+            return true;
+        }
+
         public void ConfigureRuntimePersistenceId(string collectibleId)
         {
             _persistCollectedState = true;
@@ -314,6 +335,18 @@ namespace Game.Interaction
             _materialPropertyBlock.SetColor(ColorPropertyId, color);
             _renderer.SetPropertyBlock(_materialPropertyBlock);
         }
+
+        private bool ShouldDeferToNetworkAuthorityBridge()
+        {
+            NetworkManager manager = NetworkManager.Singleton;
+            if (manager == null || !manager.IsListening)
+            {
+                return false;
+            }
+
+            NetworkInteractionAuthorityBridge authorityBridge = GetComponent<NetworkInteractionAuthorityBridge>();
+            return authorityBridge != null && authorityBridge.ShouldRouteThroughNetworkAuthority();
+        }
     }
 
     public struct ItemData
@@ -333,4 +366,5 @@ namespace Game.Interaction
         Quest
     }
 }
+
 
