@@ -414,6 +414,13 @@ namespace Game.Networking
 
             if (IsServer)
             {
+                if (TryGetAuthoritativePublisher(out NetworkSessionProgressAuthority authoritativePublisher)
+                    && !ReferenceEquals(authoritativePublisher, this))
+                {
+                    authoritativePublisher.ExecuteCompleteWorkdayAndGoHome();
+                    return;
+                }
+
                 ExecuteCompleteWorkdayAndGoHome();
                 return;
             }
@@ -430,6 +437,13 @@ namespace Game.Networking
 
             if (IsServer)
             {
+                if (TryGetAuthoritativePublisher(out NetworkSessionProgressAuthority authoritativePublisher)
+                    && !ReferenceEquals(authoritativePublisher, this))
+                {
+                    authoritativePublisher.ExecuteStartNextDay();
+                    return;
+                }
+
                 ExecuteStartNextDay();
                 return;
             }
@@ -573,6 +587,13 @@ namespace Game.Networking
 
             if (IsServer)
             {
+                if (TryGetAuthoritativePublisher(out NetworkSessionProgressAuthority authoritativePublisher)
+                    && !ReferenceEquals(authoritativePublisher, this))
+                {
+                    authoritativePublisher.ExecuteComputerSessionStart(OwnerClientId, normalizedStationKey);
+                    return;
+                }
+
                 ExecuteComputerSessionStart(OwnerClientId, normalizedStationKey);
                 return;
             }
@@ -595,6 +616,13 @@ namespace Game.Networking
 
             if (IsServer)
             {
+                if (TryGetAuthoritativePublisher(out NetworkSessionProgressAuthority authoritativePublisher)
+                    && !ReferenceEquals(authoritativePublisher, this))
+                {
+                    authoritativePublisher.ExecuteEndComputerSession(OwnerClientId, sessionToken, normalizedStationKey);
+                    return;
+                }
+
                 ExecuteEndComputerSession(OwnerClientId, sessionToken, normalizedStationKey);
                 return;
             }
@@ -633,6 +661,13 @@ namespace Game.Networking
 
             if (IsServer)
             {
+                if (TryGetAuthoritativePublisher(out NetworkSessionProgressAuthority authoritativePublisher)
+                    && !ReferenceEquals(authoritativePublisher, this))
+                {
+                    authoritativePublisher.ExecuteResolveCleaningResult(OwnerClientId, sessionToken, normalizedTaskKey, (int)result);
+                    return;
+                }
+
                 ExecuteResolveCleaningResult(OwnerClientId, sessionToken, normalizedTaskKey, (int)result);
                 return;
             }
@@ -655,6 +690,13 @@ namespace Game.Networking
 
             if (IsServer)
             {
+                if (TryGetAuthoritativePublisher(out NetworkSessionProgressAuthority authoritativePublisher)
+                    && !ReferenceEquals(authoritativePublisher, this))
+                {
+                    authoritativePublisher.ExecuteResolveWeldingResult(OwnerClientId, sessionToken, normalizedTaskKey, (int)result);
+                    return;
+                }
+
                 ExecuteResolveWeldingResult(OwnerClientId, sessionToken, normalizedTaskKey, (int)result);
                 return;
             }
@@ -717,6 +759,17 @@ namespace Game.Networking
 
             if (IsServer)
             {
+                if (TryGetAuthoritativePublisher(out NetworkSessionProgressAuthority authoritativePublisher)
+                    && !ReferenceEquals(authoritativePublisher, this))
+                {
+                    authoritativePublisher.ExecuteJobInteractableStart(
+                        OwnerClientId,
+                        normalizedTaskType,
+                        normalizedTaskKey,
+                        normalizedMinigameId);
+                    return;
+                }
+
                 ExecuteJobInteractableStart(
                     OwnerClientId,
                     normalizedTaskType,
@@ -732,14 +785,28 @@ namespace Game.Networking
         }
 
         [ServerRpc(RequireOwnership = false)]
-        private void RequestCompleteWorkdayAndGoHomeServerRpc()
+        private void RequestCompleteWorkdayAndGoHomeServerRpc(ServerRpcParams serverRpcParams = default)
         {
+            if (TryGetAuthoritativePublisher(out NetworkSessionProgressAuthority authoritativePublisher)
+                && !ReferenceEquals(authoritativePublisher, this))
+            {
+                authoritativePublisher.ExecuteCompleteWorkdayAndGoHome();
+                return;
+            }
+
             ExecuteCompleteWorkdayAndGoHome();
         }
 
         [ServerRpc(RequireOwnership = false)]
-        private void RequestStartNextDayServerRpc()
+        private void RequestStartNextDayServerRpc(ServerRpcParams serverRpcParams = default)
         {
+            if (TryGetAuthoritativePublisher(out NetworkSessionProgressAuthority authoritativePublisher)
+                && !ReferenceEquals(authoritativePublisher, this))
+            {
+                authoritativePublisher.ExecuteStartNextDay();
+                return;
+            }
+
             ExecuteStartNextDay();
         }
 
@@ -777,6 +844,13 @@ namespace Game.Networking
             string stationKey,
             ServerRpcParams serverRpcParams = default)
         {
+            if (TryGetAuthoritativePublisher(out NetworkSessionProgressAuthority authoritativePublisher)
+                && !ReferenceEquals(authoritativePublisher, this))
+            {
+                authoritativePublisher.ExecuteComputerSessionStart(serverRpcParams.Receive.SenderClientId, stationKey);
+                return;
+            }
+
             ExecuteComputerSessionStart(serverRpcParams.Receive.SenderClientId, stationKey);
         }
 
@@ -786,6 +860,13 @@ namespace Game.Networking
             string stationKey,
             ServerRpcParams serverRpcParams = default)
         {
+            if (TryGetAuthoritativePublisher(out NetworkSessionProgressAuthority authoritativePublisher)
+                && !ReferenceEquals(authoritativePublisher, this))
+            {
+                authoritativePublisher.ExecuteEndComputerSession(serverRpcParams.Receive.SenderClientId, sessionToken, stationKey);
+                return;
+            }
+
             ExecuteEndComputerSession(serverRpcParams.Receive.SenderClientId, sessionToken, stationKey);
         }
 
@@ -823,6 +904,17 @@ namespace Game.Networking
             string minigameId,
             ServerRpcParams serverRpcParams = default)
         {
+            if (TryGetAuthoritativePublisher(out NetworkSessionProgressAuthority authoritativePublisher)
+                && !ReferenceEquals(authoritativePublisher, this))
+            {
+                authoritativePublisher.ExecuteJobInteractableStart(
+                    serverRpcParams.Receive.SenderClientId,
+                    taskType,
+                    taskKey,
+                    minigameId);
+                return;
+            }
+
             ExecuteJobInteractableStart(
                 serverRpcParams.Receive.SenderClientId,
                 taskType,
@@ -851,6 +943,17 @@ namespace Game.Networking
             int resultValue,
             ServerRpcParams serverRpcParams = default)
         {
+            if (TryGetAuthoritativePublisher(out NetworkSessionProgressAuthority authoritativePublisher)
+                && !ReferenceEquals(authoritativePublisher, this))
+            {
+                authoritativePublisher.ExecuteResolveCleaningResult(
+                    serverRpcParams.Receive.SenderClientId,
+                    sessionToken,
+                    taskKey,
+                    resultValue);
+                return;
+            }
+
             ExecuteResolveCleaningResult(
                 serverRpcParams.Receive.SenderClientId,
                 sessionToken,
@@ -865,11 +968,28 @@ namespace Game.Networking
             int resultValue,
             ServerRpcParams serverRpcParams = default)
         {
+            if (TryGetAuthoritativePublisher(out NetworkSessionProgressAuthority authoritativePublisher)
+                && !ReferenceEquals(authoritativePublisher, this))
+            {
+                authoritativePublisher.ExecuteResolveWeldingResult(
+                    serverRpcParams.Receive.SenderClientId,
+                    sessionToken,
+                    taskKey,
+                    resultValue);
+                return;
+            }
+
             ExecuteResolveWeldingResult(
                 serverRpcParams.Receive.SenderClientId,
                 sessionToken,
                 taskKey,
                 resultValue);
+        }
+
+        private static bool TryGetAuthoritativePublisher(out NetworkSessionProgressAuthority authority)
+        {
+            authority = _authoritativePublisher;
+            return authority != null && authority.IsServer && authority.IsSpawned;
         }
 
         [ClientRpc]

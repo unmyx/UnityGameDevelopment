@@ -9,16 +9,13 @@ EditorBuildSettings:
     path: Assets/Scenes/Menu.unity
     guid: 805cb8ae55e32ee4a9bf90d4d47e825a
   - enabled: 1
+    path: Assets/Scenes/HomeScene.unity
+    guid: 3f7c9b7250ddece40a7ed514260c9c58
+  - enabled: 1
     path: Assets/Scenes/GameplayScene.unity
     guid: 16bb86a3de007344b8b0926b0d3fb870
   - enabled: 1
-    path: Assets/Scenes/HomeScene.unity
-    guid: 46e19bf3af6abd2439a783889af96115
-  - enabled: 1
     path: Assets/Scenes/NetworkSandbox.unity
     guid: 64f70939b8c74fef832d80983f7d2818
-  - enabled: 1
-    path: Assets/Scenes/TestScene.unity
-    guid: 98184599591f7684ba7000e1afdccee2
   m_configObjects:
     com.unity.input.settings.actions: {fileID: -944628639613478452, guid: 052faaac586de48259a63d0c4782560b, type: 3}

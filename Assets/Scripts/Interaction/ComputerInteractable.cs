@@ -66,6 +66,7 @@ namespace Game.Interaction
         private int _activeComputerSessionToken;
         private string _activeComputerStationKey = string.Empty;
         private bool _hasSubmittedComputerSessionEnd;
+        private bool _hasLoggedFallbackReferenceWarning;
 
         private void OnEnable()
         {
@@ -336,6 +337,23 @@ namespace Game.Interaction
         private bool TryResolveRequiredReferences(out string validationError)
         {
             List<string> failures = new List<string>(4);
+            List<string> missingInspectorReferences = new List<string>(3);
+            List<string> recoveredByFallback = new List<string>(3);
+
+            if (_stationCameraPose == null)
+            {
+                missingInspectorReferences.Add(nameof(_stationCameraPose));
+            }
+
+            if (_stationCameraLookTarget == null)
+            {
+                missingInspectorReferences.Add(nameof(_stationCameraLookTarget));
+            }
+
+            if (_computerCanvas == null)
+            {
+                missingInspectorReferences.Add(nameof(_computerCanvas));
+            }
 
             if (_stationCameraPose == null)
             {
@@ -343,6 +361,7 @@ namespace Game.Interaction
                 if (pose != null)
                 {
                     _stationCameraPose = pose;
+                    recoveredByFallback.Add($"{nameof(_stationCameraPose)} from child '{CameraPoseChildName}'");
                 }
             }
 
@@ -352,12 +371,29 @@ namespace Game.Interaction
                 if (lookTarget != null)
                 {
                     _stationCameraLookTarget = lookTarget;
+                    recoveredByFallback.Add($"{nameof(_stationCameraLookTarget)} from child '{LookTargetChildName}'");
                 }
             }
 
             if (_computerCanvas == null)
             {
                 _computerCanvas = FindCanvasByName(FallbackCanvasName);
+                if (_computerCanvas != null)
+                {
+                    recoveredByFallback.Add($"{nameof(_computerCanvas)} from canvas '{FallbackCanvasName}'");
+                }
+            }
+
+            if (missingInspectorReferences.Count > 0
+                && recoveredByFallback.Count > 0
+                && !_hasLoggedFallbackReferenceWarning)
+            {
+                Debug.LogWarning(
+                    $"[ComputerInteractable] Missing serialized inspector references ({string.Join(", ", missingInspectorReferences)}). " +
+                    $"Recovered via runtime fallback ({string.Join(", ", recoveredByFallback)}). " +
+                    "Assign references in inspector to avoid name-based dependency.",
+                    this);
+                _hasLoggedFallbackReferenceWarning = true;
             }
 
             if (_computerCanvas == null)
@@ -373,6 +409,11 @@ namespace Game.Interaction
             if (_stationCameraLookTarget == null)
             {
                 failures.Add($"missing {LookTargetChildName} child transform");
+            }
+
+            if (failures.Count > 0 && missingInspectorReferences.Count > 0)
+            {
+                failures.Insert(0, $"missing serialized inspector references ({string.Join(", ", missingInspectorReferences)})");
             }
 
             if (failures.Count > 0)

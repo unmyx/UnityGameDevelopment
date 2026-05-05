@@ -3,6 +3,7 @@ using Game.Input;
 using Game.Inventory;
 using Game.Minigames;
 using Game.Player;
+using Unity.Netcode;
 
 namespace Game.Core
 {
@@ -250,7 +251,18 @@ namespace Game.Core
                 return;
             }
 
+            if (IsNonAuthoritativeNetworkClient())
+            {
+                return;
+            }
+
             SaveManager.Save();
+        }
+
+        private static bool IsNonAuthoritativeNetworkClient()
+        {
+            NetworkManager manager = NetworkManager.Singleton;
+            return manager != null && manager.IsListening && manager.IsClient && !manager.IsServer;
         }
 
         private void CaptureCursorStateForPause()

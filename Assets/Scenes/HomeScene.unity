@@ -589,9 +589,9 @@ MonoBehaviour:
   m_Name: 
   m_EditorClassIdentifier: Assembly-CSharp::Game.Interaction.ComputerInteractable
   _canInteract: 1
-  _computerCanvas: {fileID: 0}
-  _stationCameraPose: {fileID: 0}
-  _stationCameraLookTarget: {fileID: 0}
+  _computerCanvas: {fileID: 2092772350}
+  _stationCameraPose: {fileID: 993581264}
+  _stationCameraLookTarget: {fileID: 92015783}
   _cameraTransitionDuration: 0.35
   _cameraReturnDuration: 0.25
   _worldCameraLocalOffset: {x: 0, y: 0.18, z: -0.42}

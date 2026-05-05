@@ -13,6 +13,13 @@ namespace Game.Networking
     public class OfflineScenePlayerGate : MonoBehaviour
     {
         [SerializeField] private bool _disableWhenNetworkListening = true;
+        private static bool _sceneHookInstalled;
+
+        [RuntimeInitializeOnLoadMethod(RuntimeInitializeLoadType.SubsystemRegistration)]
+        private static void ResetStatics()
+        {
+            _sceneHookInstalled = false;
+        }
 
         private void Awake()
         {
@@ -45,32 +52,38 @@ namespace Game.Networking
         [RuntimeInitializeOnLoadMethod(RuntimeInitializeLoadType.AfterSceneLoad)]
         private static void InstallForActiveScene()
         {
-            Scene activeScene = SceneManager.GetActiveScene();
-            if (!activeScene.IsValid())
+            EnsureSceneHookInstalled();
+            ApplyForScene(SceneManager.GetActiveScene());
+        }
+
+        private static void EnsureSceneHookInstalled()
+        {
+            if (_sceneHookInstalled)
             {
                 return;
             }
 
-            if (!IsNetworkSession())
+            SceneManager.sceneLoaded += OnSceneLoaded;
+            _sceneHookInstalled = true;
+        }
+
+        private static void OnSceneLoaded(Scene scene, LoadSceneMode mode)
+        {
+            ApplyForScene(scene);
+        }
+
+        private static void ApplyForScene(Scene scene)
+        {
+            if (!scene.IsValid() || !IsNetworkSession())
             {
                 return;
             }
 
-            GameObject[] roots = activeScene.GetRootGameObjects();
+            GameObject[] roots = scene.GetRootGameObjects();
             for (int i = 0; i < roots.Length; i++)
             {
                 GameObject root = roots[i];
-                if (root == null || !root.activeInHierarchy)
-                {
-                    continue;
-                }
-
-                if (!string.Equals(root.name, "Player", System.StringComparison.Ordinal))
-                {
-                    continue;
-                }
-
-                if (!IsOfflineScenePlayerRoot(root))
+                if (root == null || !root.activeInHierarchy || !IsOfflineScenePlayerRoot(root))
                 {
                     continue;
                 }
@@ -82,6 +95,7 @@ namespace Game.Networking
                 }
 
                 gate.ApplyGate();
+                Debug.Log($"[OfflineScenePlayerGate] Disabled offline scene player root '{root.name}' for network session.", root);
             }
         }
 

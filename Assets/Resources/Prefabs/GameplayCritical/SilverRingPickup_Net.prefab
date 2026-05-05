@@ -134,7 +134,7 @@ MonoBehaviour:
   _itemDescription: 
   _destroyOnPickup: 1
   _pickupCooldown: 0.1
-  _countsAsStolenLoot: 0
+  _countsAsStolenLoot: 1
   _persistCollectedState: 0
   _collectiblePersistenceId: 
 --- !u!114 &884411220099000201

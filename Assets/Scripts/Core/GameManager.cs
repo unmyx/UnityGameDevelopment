@@ -101,6 +101,7 @@ namespace Game.Core
         private const string DailyTaskTypeCleaning = "cleaning";
         private const string DailyTaskTypeWelding = "welding";
         private const string MenuSceneName = "Menu";
+        private const string NetworkSandboxSceneName = "NetworkSandbox";
         private const string GameplaySceneName = "GameplayScene";
         private const string HomeSceneName = "HomeScene";
         public const string UpgradeIdInventoryQuickSlots = "inventory_quick_slots";
@@ -167,6 +168,12 @@ namespace Game.Core
 
         [SerializeField]
         private GameState _currentState = GameState.FreePlay;
+
+        [NonSerialized]
+        private bool _hasBootstrapStateOverride;
+
+        [NonSerialized]
+        private GameState _bootstrapStateOverride = GameState.FreePlay;
 
         [SerializeField]
         [Tooltip("Runtime general currency starting value before save restore.")]
@@ -276,6 +283,18 @@ namespace Game.Core
         public int CurrentDay => _currentDay;
         public RunPhase CurrentRunPhase => _currentRunPhase;
 
+        public void SetBootstrapStateOverride(GameState state)
+        {
+            _bootstrapStateOverride = state;
+            _hasBootstrapStateOverride = true;
+        }
+
+        public void ClearBootstrapStateOverride()
+        {
+            _hasBootstrapStateOverride = false;
+            _bootstrapStateOverride = GameState.FreePlay;
+        }
+
         private IGameState _currentStateImplementation;
         private bool _isTransitioning;
         private bool _hasAttemptedInitialLoad;
@@ -355,6 +374,12 @@ namespace Game.Core
         {
             EnsureServicesInitialized();
             RefreshRuntimeBindings();
+            if (ShouldBypassStateBootstrapForActiveScene())
+            {
+                SuppressStateBootstrapForCurrentScene();
+                return;
+            }
+
             if (!DetermineAndInitializeStartingState())
             {
                 return;
@@ -376,6 +401,12 @@ namespace Game.Core
         {
             _isRunPhaseSceneRouting = false;
             RefreshRuntimeBindings();
+            if (ShouldBypassStateBootstrapForActiveScene())
+            {
+                SuppressStateBootstrapForCurrentScene();
+                return;
+            }
+
             if (!DetermineAndInitializeStartingState())
             {
                 return;
@@ -393,6 +424,50 @@ namespace Game.Core
             }
 
             StartCoroutine(DeferredInitialLoad());
+        }
+
+        private bool ShouldBypassStateBootstrapForActiveScene()
+        {
+            Scene activeScene = SceneManager.GetActiveScene();
+            if (!activeScene.IsValid())
+            {
+                return false;
+            }
+
+            return string.Equals(activeScene.name, NetworkSandboxSceneName, StringComparison.Ordinal);
+        }
+
+        private void SuppressStateBootstrapForCurrentScene()
+        {
+            if (_currentStateImplementation != null)
+            {
+                if (_currentStateImplementation is UnityEngine.Object stateObject && stateObject == null)
+                {
+                    _currentStateImplementation = null;
+                }
+                else
+                {
+                    try
+                    {
+                        _currentStateImplementation.OnStateExit();
+                    }
+                    catch (Exception exception)
+                    {
+                        Debug.LogWarning($"[GameManager] Ignored state exit during bootstrap-only scene bypass: {exception.Message}", this);
+                    }
+                }
+            }
+
+            _currentStateImplementation = null;
+            _isTransitioning = false;
+
+            Scene activeScene = SceneManager.GetActiveScene();
+            if (activeScene.IsValid())
+            {
+                Debug.Log(
+                    $"[GameManager] Scene '{activeScene.name}' is bootstrap-only. State initialization is intentionally bypassed.",
+                    this);
+            }
         }
 
         private void OnMinigameStarted(MinigameStartedEvent eventData)
@@ -469,14 +544,15 @@ namespace Game.Core
         private bool DetermineAndInitializeStartingState()
         {
             EnsureServicesInitialized();
-            if (!ValidateManagerSetupForScene())
+            if (!TryDetermineBootstrapState(out GameState bootstrapState, out string bootstrapFailure))
             {
+                FailCriticalSetup($"Unable to determine startup state: {bootstrapFailure}");
                 return false;
             }
 
-            if (!_stateTransitionService.RefreshStateFromScene(ref _currentState, ref _currentStateImplementation, out string transitionFailure))
+            if (!_stateTransitionService.RefreshStateFromScene(bootstrapState, ref _currentState, ref _currentStateImplementation, out string transitionFailure))
             {
-                FailCriticalSetup($"Failed to enter configured state '{_currentState}': {transitionFailure}");
+                FailCriticalSetup($"Failed to enter startup state '{bootstrapState}': {transitionFailure}");
                 return false;
             }
 
@@ -539,14 +615,107 @@ namespace Game.Core
             }
         }
 
-        private bool ValidateManagerSetupForScene()
+        private bool TryDetermineBootstrapState(out GameState bootstrapState, out string failureReason)
         {
-            if (TryValidateSceneSetupForState(_currentState, out string failureReason))
+            Scene activeScene = SceneManager.GetActiveScene();
+            string activeSceneName = activeScene.IsValid() ? activeScene.name : string.Empty;
+            GameState configuredState = _currentState;
+
+            if (_stateResolver == null)
             {
+                bootstrapState = default;
+                failureReason = "State resolver is not initialized.";
+                return false;
+            }
+
+            if (_stateResolver.TryResolveStateFromSceneName(activeSceneName, out GameState sceneMappedState))
+            {
+                if (TryValidateSceneSetupForState(sceneMappedState, out string sceneMappingValidationFailure))
+                {
+                    bootstrapState = sceneMappedState;
+                    failureReason = string.Empty;
+                    return true;
+                }
+
+                Debug.LogWarning(
+                    $"[GameManager] Scene '{activeSceneName}' maps to startup state '{sceneMappedState}', " +
+                    $"but required wiring is incomplete ({sceneMappingValidationFailure}). " +
+                    "Falling back to validated configured startup state.",
+                    this);
+            }
+
+            if (_hasBootstrapStateOverride)
+            {
+                GameState sanitizedOverride = _stateResolver.SanitizeBootstrapState(_bootstrapStateOverride, out bool overrideRemappedFromMinigame);
+                if (TryValidateSceneSetupForState(sanitizedOverride, out string overrideValidationFailure))
+                {
+                    if (overrideRemappedFromMinigame)
+                    {
+                        Debug.LogWarning(
+                            $"[GameManager] Bootstrap override requested Minigame, remapped to '{sanitizedOverride}' for startup safety.",
+                            this);
+                    }
+
+                    bootstrapState = sanitizedOverride;
+                    failureReason = string.Empty;
+                    return true;
+                }
+
+                Debug.LogWarning(
+                    $"[GameManager] Bootstrap override '{_bootstrapStateOverride}' is invalid in scene '{activeSceneName}' ({overrideValidationFailure}). " +
+                    "Falling back to validated configured startup state.",
+                    this);
+            }
+
+            GameState sanitizedConfigured = _stateResolver.SanitizeBootstrapState(configuredState, out bool configuredRemappedFromMinigame);
+            if (TryValidateSceneSetupForState(sanitizedConfigured, out string configuredValidationFailure))
+            {
+                if (configuredRemappedFromMinigame)
+                {
+                    Debug.LogWarning(
+                        $"[GameManager] Serialized startup state '{configuredState}' is not valid for bootstrap; remapped to '{sanitizedConfigured}'.",
+                        this);
+                }
+
+                if (!string.IsNullOrWhiteSpace(activeSceneName))
+                {
+                    Debug.LogWarning(
+                        $"[GameManager] Startup state for scene '{activeSceneName}' fell back to validated serialized state '{sanitizedConfigured}'.",
+                        this);
+                }
+
+                bootstrapState = sanitizedConfigured;
+                failureReason = string.Empty;
                 return true;
             }
 
-            FailCriticalSetup($"Missing required wiring for state '{_currentState}': {failureReason}");
+            if (TryValidateSceneSetupForState(GameState.Menu, out string menuValidationFailure))
+            {
+                Debug.LogWarning(
+                    $"[GameManager] Serialized startup state '{configuredState}' is invalid ({configuredValidationFailure}). " +
+                    "Falling back to Menu state wiring.",
+                    this);
+                bootstrapState = GameState.Menu;
+                failureReason = string.Empty;
+                return true;
+            }
+
+            if (TryValidateSceneSetupForState(GameState.FreePlay, out string freePlayValidationFailure))
+            {
+                Debug.LogWarning(
+                    $"[GameManager] Serialized startup state '{configuredState}' is invalid ({configuredValidationFailure}). " +
+                    "Falling back to FreePlay state wiring.",
+                    this);
+                bootstrapState = GameState.FreePlay;
+                failureReason = string.Empty;
+                return true;
+            }
+
+            bootstrapState = default;
+            failureReason =
+                $"No valid startup state for scene '{activeSceneName}'. " +
+                $"Configured '{configuredState}' failed ({configuredValidationFailure}); " +
+                $"Menu failed ({menuValidationFailure}); FreePlay failed ({freePlayValidationFailure}).";
             return false;
         }
 
@@ -3582,7 +3751,6 @@ namespace Game.Core
                 _inventorySystem = source._inventorySystem;
             }
 
-            _currentState = source._currentState;
             RefreshRuntimeBindings();
         }
 

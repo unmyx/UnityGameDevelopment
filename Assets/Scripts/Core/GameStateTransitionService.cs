@@ -14,7 +14,11 @@ namespace Game.Core
             _resolver = resolver;
         }
 
-        public bool RefreshStateFromScene(ref GameState currentState, ref IGameState currentStateImplementation, out string failureReason)
+        public bool RefreshStateFromScene(
+            GameState targetState,
+            ref GameState currentState,
+            ref IGameState currentStateImplementation,
+            out string failureReason)
         {
             if (_resolver == null)
             {
@@ -22,7 +26,6 @@ namespace Game.Core
                 return false;
             }
 
-            GameState targetState = _resolver.DetermineStartingState(currentState);
             if (!_resolver.TryResolveStateImplementation(targetState, out IGameState implementation, out failureReason))
             {
                 currentStateImplementation = null;

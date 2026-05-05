@@ -30,8 +30,11 @@ namespace Game.Systems
         }
 
         [Header("References")]
-        // TODO(MP-2): Replace single serialized player target with player-context aware target arbitration.
-        [SerializeField] private Transform player;
+        // Compatibility-only fallback target for offline scenes.
+        // Runtime targeting should use ResolveRuntimeTargetForCurrentMode().
+        [SerializeField]
+        [Tooltip("Optional offline fallback target. Runtime targeting is resolved dynamically; network sessions ignore this field.")]
+        private Transform player;
         [SerializeField] private Transform head;
 
         [Header("Movement")]
@@ -144,6 +147,8 @@ namespace Game.Systems
         private bool _isPostLieFailAlertActive;
         private bool _isPostLieFailChaseActive;
         private bool _hasResolvedLieFailResolution;
+        private bool _hasLoggedSerializedFallbackTargetUsage;
+        private Transform _runtimeTarget;
 
         private bool hasCaughtPlayer;
         private bool triggeredMinigame;
@@ -258,14 +263,10 @@ namespace Game.Systems
             if (IsAuthoritativeNetworkServer())
             {
                 EnsureOwnerCatchStateDayIsCurrent();
-                ResolveServerTargetPlayer();
                 TryResolveTimedOutPendingLieCatch();
             }
-            else
-            {
-                _activeTargetClientId = NetworkNpcAuthorityBridge.NoTargetClientId;
-            }
 
+            ResolveRuntimeTargetForCurrentMode();
             TryAutoAssignReferences();
 
             if (_postLieMinigameGraceTimer > 0f)
@@ -423,12 +424,13 @@ namespace Game.Systems
 
         private bool IsPlayerInNonRestrictedZone()
         {
-            if (player == null || nonRestrictedZones == null || nonRestrictedZones.Count == 0)
+            Transform runtimeTarget = GetRuntimeTargetTransform();
+            if (runtimeTarget == null || nonRestrictedZones == null || nonRestrictedZones.Count == 0)
             {
                 return false;
             }
 
-            Vector3 playerPosition = player.position;
+            Vector3 playerPosition = runtimeTarget.position;
             Vector3 playerDetectionTarget = GetPlayerDetectionTarget();
 
             for (int i = 0; i < nonRestrictedZones.Count; i++)
@@ -470,13 +472,14 @@ namespace Game.Systems
                 _losePlayerTimer = 0f;
                 _isSearchingLastKnownPosition = false;
 
-                if (player != null)
+                Transform runtimeTarget = GetRuntimeTargetTransform();
+                if (runtimeTarget != null)
                 {
-                    _lastKnownPlayerPosition = player.position;
+                    _lastKnownPlayerPosition = runtimeTarget.position;
                     _hasLastKnownPlayerPosition = true;
-                    SetAgentDestination(player.position, "Chasing");
+                    SetAgentDestination(runtimeTarget.position, "Chasing");
 
-                    float distanceToPlayer = Vector3.Distance(transform.position, player.position);
+                    float distanceToPlayer = Vector3.Distance(transform.position, runtimeTarget.position);
                     if (!hasCaughtPlayer && !IsInPostLieMinigameGracePeriod() && distanceToPlayer <= catchDistance)
                     {
                         if (IsPauseBlockingLieTrigger())
@@ -515,7 +518,8 @@ namespace Game.Systems
 
         private bool DetectPlayer()
         {
-            if (player == null || head == null)
+            Transform runtimeTarget = GetRuntimeTargetTransform();
+            if (runtimeTarget == null || head == null)
             {
                 _hadDetectionLastFrame = false;
                 _hadRawDetectionLastFrame = false;
@@ -580,7 +584,7 @@ namespace Game.Systems
             if (rawDetected)
             {
                 _detectionTimer = detectionHoldTime;
-                _lastKnownPlayerPosition = player.position;
+                _lastKnownPlayerPosition = runtimeTarget.position;
                 _hasLastKnownPlayerPosition = true;
             }
             else
@@ -603,17 +607,18 @@ namespace Game.Systems
 
         private Vector3 GetPlayerDetectionTarget()
         {
-            if (player == null)
+            Transform runtimeTarget = GetRuntimeTargetTransform();
+            if (runtimeTarget == null)
             {
                 return transform.position;
             }
 
-            if (player.TryGetComponent(out CharacterController characterController))
+            if (runtimeTarget.TryGetComponent(out CharacterController characterController))
             {
                 return characterController.bounds.center;
             }
 
-            return player.position + Vector3.up * 0.9f;
+            return runtimeTarget.position + Vector3.up * 0.9f;
         }
 
         private Vector3 GetDetectionOrigin()
@@ -687,28 +692,30 @@ namespace Game.Systems
 
         private bool IsPlayerHit(Transform hitTransform)
         {
-            if (player == null || hitTransform == null)
+            Transform runtimeTarget = GetRuntimeTargetTransform();
+            if (runtimeTarget == null || hitTransform == null)
             {
                 return false;
             }
 
-            if (hitTransform == player || hitTransform.IsChildOf(player))
+            if (hitTransform == runtimeTarget || hitTransform.IsChildOf(runtimeTarget))
             {
                 return true;
             }
 
-            Transform playerParent = player.parent;
+            Transform playerParent = runtimeTarget.parent;
             return playerParent != null && (hitTransform == playerParent || hitTransform.IsChildOf(playerParent));
         }
 
         private void TryCatchPlayer()
         {
-            if (player == null)
+            Transform runtimeTarget = GetRuntimeTargetTransform();
+            if (runtimeTarget == null)
             {
                 return;
             }
 
-            float distanceToPlayer = Vector3.Distance(transform.position, player.position);
+            float distanceToPlayer = Vector3.Distance(transform.position, runtimeTarget.position);
             if (!hasCaughtPlayer && distanceToPlayer < catchDistance)
             {
                 if (IsPauseBlockingLieTrigger())
@@ -790,9 +797,10 @@ namespace Game.Systems
                     triggeredMinigame = true;
                     _activeLieMinigameOwnerPlayerId = ownerPlayerId;
 
-                    if (player != null)
+                    Transform runtimeTarget = GetRuntimeTargetTransform();
+                    if (runtimeTarget != null)
                     {
-                        _freezeProbeStartPosition = player.position;
+                        _freezeProbeStartPosition = runtimeTarget.position;
                         if (_freezeProbeRoutine != null)
                         {
                             StopCoroutine(_freezeProbeRoutine);
@@ -923,13 +931,14 @@ namespace Game.Systems
             yield return null;
             yield return null;
 
-            if (player == null)
+            Transform runtimeTarget = GetRuntimeTargetTransform();
+            if (runtimeTarget == null)
             {
                 yield break;
             }
 
             bool stateLocked = GameManager.Instance != null && GameManager.Instance.CurrentState == GameState.Minigame;
-            bool movedAfterTrigger = Vector3.Distance(_freezeProbeStartPosition, player.position) > FreezeProbeDistanceTolerance;
+            bool movedAfterTrigger = Vector3.Distance(_freezeProbeStartPosition, runtimeTarget.position) > FreezeProbeDistanceTolerance;
 
             if (!stateLocked || movedAfterTrigger)
             {
@@ -939,12 +948,13 @@ namespace Game.Systems
 
         private void TryDisableFallbackMovementComponent()
         {
-            if (player == null || _fallbackDisabledMovementComponent != null)
+            Transform runtimeTarget = GetRuntimeTargetTransform();
+            if (runtimeTarget == null || _fallbackDisabledMovementComponent != null)
             {
                 return;
             }
 
-            Behaviour[] behaviours = player.GetComponents<Behaviour>();
+            Behaviour[] behaviours = runtimeTarget.GetComponents<Behaviour>();
             Behaviour bestCandidate = null;
             int bestScore = -1;
 
@@ -1180,11 +1190,12 @@ namespace Game.Systems
             _losePlayerTimer = 0f;
             _isSearchingLastKnownPosition = false;
 
-            if (player != null)
+            Transform runtimeTarget = GetRuntimeTargetTransform();
+            if (runtimeTarget != null)
             {
-                _lastKnownPlayerPosition = player.position;
+                _lastKnownPlayerPosition = runtimeTarget.position;
                 _hasLastKnownPlayerPosition = true;
-                SetAgentDestination(player.position, "PostLieFailChase");
+                SetAgentDestination(runtimeTarget.position, "PostLieFailChase");
             }
 
             ChangeState(NPCState.Chasing);
@@ -1200,17 +1211,18 @@ namespace Game.Systems
                 return;
             }
 
-            if (player == null)
+            Transform runtimeTarget = GetRuntimeTargetTransform();
+            if (runtimeTarget == null)
             {
                 StopAgent();
                 return;
             }
 
-            _lastKnownPlayerPosition = player.position;
+            _lastKnownPlayerPosition = runtimeTarget.position;
             _hasLastKnownPlayerPosition = true;
-            SetAgentDestination(player.position, "PostLieFailChase");
+            SetAgentDestination(runtimeTarget.position, "PostLieFailChase");
 
-            float distanceToPlayer = Vector3.Distance(transform.position, player.position);
+            float distanceToPlayer = Vector3.Distance(transform.position, runtimeTarget.position);
             if (distanceToPlayer <= catchDistance)
             {
                 EndPostLieFailSequence();
@@ -1300,9 +1312,10 @@ namespace Game.Systems
                 }
             }
 
-            if (networkManager != null && networkManager.IsListening && networkManager.IsServer && player != null)
+            Transform runtimeTarget = GetRuntimeTargetTransform();
+            if (networkManager != null && networkManager.IsListening && networkManager.IsServer && runtimeTarget != null)
             {
-                NetworkObject playerNetworkObject = player.GetComponent<NetworkObject>();
+                NetworkObject playerNetworkObject = runtimeTarget.GetComponent<NetworkObject>();
                 if (playerNetworkObject != null && playerNetworkObject.IsSpawned)
                 {
                     NetworkSessionProgressAuthority.TrySyncStolenLootSnapshotToClient(playerNetworkObject.OwnerClientId, ownerPlayerId);
@@ -1313,9 +1326,10 @@ namespace Game.Systems
         private string ResolveCaughtPlayerOwnerKey()
         {
             NetworkManager networkManager = NetworkManager.Singleton;
-            if (networkManager != null && networkManager.IsListening && networkManager.IsServer && player != null)
+            Transform runtimeTarget = GetRuntimeTargetTransform();
+            if (networkManager != null && networkManager.IsListening && networkManager.IsServer && runtimeTarget != null)
             {
-                NetworkObject playerNetworkObject = player.GetComponent<NetworkObject>();
+                NetworkObject playerNetworkObject = runtimeTarget.GetComponent<NetworkObject>();
                 if (playerNetworkObject != null && playerNetworkObject.IsSpawned)
                 {
                     return NetworkOwnerKeyUtility.GetOwnerKeyForSender(playerNetworkObject.OwnerClientId);
@@ -1368,7 +1382,7 @@ namespace Game.Systems
                 _lockedTargetClientId = NetworkNpcAuthorityBridge.NoTargetClientId;
                 _targetLockUntilTime = 0f;
                 _retargetCooldownUntilTime = 0f;
-                player = null;
+                _runtimeTarget = null;
             }
         }
 
@@ -1614,11 +1628,85 @@ namespace Game.Systems
             return manager.IsServer;
         }
 
+        private Transform GetRuntimeTargetTransform()
+        {
+            return _runtimeTarget;
+        }
+
+        private void ResolveRuntimeTargetForCurrentMode()
+        {
+            NetworkManager networkManager = NetworkManager.Singleton;
+            bool isNetworkSession = networkManager != null && networkManager.IsListening;
+
+            if (isNetworkSession)
+            {
+                if (networkManager.IsServer)
+                {
+                    ResolveServerTargetPlayer();
+                    return;
+                }
+
+                _runtimeTarget = null;
+                _activeTargetClientId = NetworkNpcAuthorityBridge.NoTargetClientId;
+                _lockedTargetClientId = NetworkNpcAuthorityBridge.NoTargetClientId;
+                _targetLockUntilTime = 0f;
+                _retargetCooldownUntilTime = 0f;
+                return;
+            }
+
+            _activeTargetClientId = NetworkNpcAuthorityBridge.NoTargetClientId;
+            _lockedTargetClientId = NetworkNpcAuthorityBridge.NoTargetClientId;
+            _targetLockUntilTime = 0f;
+            _retargetCooldownUntilTime = 0f;
+
+            if (PlayerContextLocator.TryGetLocalPlayerTransform(out Transform localPlayerTransform)
+                && localPlayerTransform != null)
+            {
+                _runtimeTarget = localPlayerTransform;
+                return;
+            }
+
+            if (PlayerContextLocator.IsCompatibilityFallbackAllowed()
+                && PlayerContextLocator.TryGetAuthoritativePlayerTransform(out Transform compatibilityPlayerTransform)
+                && compatibilityPlayerTransform != null)
+            {
+                _runtimeTarget = compatibilityPlayerTransform;
+                return;
+            }
+
+            if (player != null)
+            {
+                _runtimeTarget = player;
+                if (!_hasLoggedSerializedFallbackTargetUsage)
+                {
+                    _hasLoggedSerializedFallbackTargetUsage = true;
+                    Debug.LogWarning(
+                        "[NPCController] Using serialized fallback player target in offline mode. " +
+                        "Prefer PlayerContext-based runtime resolution for reliability.",
+                        this);
+                }
+
+                return;
+            }
+
+            _runtimeTarget = null;
+            if (!_hasLoggedMissingPlayerReference)
+            {
+                _hasLoggedMissingPlayerReference = true;
+                Debug.LogWarning(
+                    "[NPCController] Runtime player target could not be resolved in offline mode. " +
+                    "Provide a PlayerContext local transform or assign serialized fallback player target.",
+                    this);
+            }
+        }
+
         private void ResolveServerTargetPlayer()
         {
             NetworkManager networkManager = NetworkManager.Singleton;
             if (networkManager == null || !networkManager.IsListening || !networkManager.IsServer)
             {
+                _runtimeTarget = null;
+                _activeTargetClientId = NetworkNpcAuthorityBridge.NoTargetClientId;
                 return;
             }
 
@@ -1631,7 +1719,7 @@ namespace Game.Systems
                 bool keepLockedTarget = Time.time < _targetLockUntilTime || distanceToLockedTarget <= breakDistance;
                 if (keepLockedTarget)
                 {
-                    player = lockedTransform;
+                    _runtimeTarget = lockedTransform;
                     _activeTargetClientId = _lockedTargetClientId;
                     return;
                 }
@@ -1642,7 +1730,7 @@ namespace Game.Systems
                 && TryGetConnectedPlayerTransform(_activeTargetClientId, out Transform cooldownTransform)
                 && cooldownTransform != null)
             {
-                player = cooldownTransform;
+                _runtimeTarget = cooldownTransform;
                 return;
             }
 
@@ -1675,7 +1763,7 @@ namespace Game.Systems
                 bestClientId = candidateClientId;
             }
 
-            player = bestTransform;
+            _runtimeTarget = bestTransform;
             _activeTargetClientId = bestTransform != null ? bestClientId : NetworkNpcAuthorityBridge.NoTargetClientId;
             if (_activeTargetClientId != _lockedTargetClientId)
             {
@@ -1896,29 +1984,6 @@ namespace Game.Systems
 
         private void TryAutoAssignReferences()
         {
-            if (player == null)
-            {
-                if (PlayerContextLocator.TryGetLocalPlayerTransform(out Transform playerTransform)
-                    && playerTransform != null)
-                {
-                    player = playerTransform;
-                }
-                else if (PlayerContextLocator.IsCompatibilityFallbackAllowed()
-                         && PlayerContextLocator.TryGetAuthoritativePlayerTransform(out playerTransform)
-                         && playerTransform != null)
-                {
-                    player = playerTransform;
-                }
-                else if (!_hasLoggedMissingPlayerReference)
-                {
-                    _hasLoggedMissingPlayerReference = true;
-                    Debug.LogWarning(
-                        "[NPCController] Player reference is missing and auto-assign by PlayerController failed. " +
-                        "Assign Player transform in inspector for reliable detection/chase.",
-                        this);
-                }
-            }
-
             if (head == null)
             {
                 head = transform;

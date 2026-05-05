@@ -1,3 +1,5 @@
+using System;
+
 namespace Game.Core
 {
     internal sealed class GameStateResolver
@@ -13,9 +15,35 @@ namespace Game.Core
             _minigameState = minigameState;
         }
 
-        public GameState DetermineStartingState(GameState configuredState)
+        public GameState SanitizeBootstrapState(GameState configuredState, out bool remappedFromMinigame)
         {
+            if (configuredState == GameState.Minigame)
+            {
+                remappedFromMinigame = true;
+                return GameState.FreePlay;
+            }
+
+            remappedFromMinigame = false;
             return configuredState;
+        }
+
+        public bool TryResolveStateFromSceneName(string activeSceneName, out GameState state)
+        {
+            if (string.Equals(activeSceneName, "Menu", StringComparison.Ordinal))
+            {
+                state = GameState.Menu;
+                return true;
+            }
+
+            if (string.Equals(activeSceneName, "HomeScene", StringComparison.Ordinal)
+                || string.Equals(activeSceneName, "GameplayScene", StringComparison.Ordinal))
+            {
+                state = GameState.FreePlay;
+                return true;
+            }
+
+            state = default;
+            return false;
         }
 
         public bool TryResolveStateImplementation(GameState state, out IGameState implementation, out string failureReason)
