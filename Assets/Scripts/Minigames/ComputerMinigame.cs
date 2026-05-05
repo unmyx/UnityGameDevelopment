@@ -1,8 +1,10 @@
 using Game.Core;
 using Game.Core.Events;
 using Game.Input;
+using Game.Inventory;
 using Game.Networking;
 using Game.Player;
+using Game.UI;
 using Unity.Netcode;
 using UnityEngine;
 
@@ -339,6 +341,35 @@ namespace Game.Minigames
             _awaitingNetworkSellResponse = false;
             _pendingNetworkSellItemId = string.Empty;
 
+            if (response.success && IsNonAuthoritativeNetworkClient())
+            {
+                string ownerPlayerId = PlayerInventoryAuthority.GetLocalOwnerPlayerId();
+                InventorySystem inventorySystem = InventorySystem.Instance;
+                int removedCount = inventorySystem != null
+                    ? inventorySystem.RemoveItemsByItemId(responseItemId, 1, ownerPlayerId)
+                    : 0;
+
+                if (removedCount > 0)
+                {
+                    if (!PlayerContextLocator.TryGetLocalInventoryGridUI(out InventoryGridUI inventoryGridUI)
+                        && PlayerContextLocator.IsCompatibilityFallbackAllowed())
+                    {
+                        PlayerContextLocator.TryGetInventoryGridUI(out inventoryGridUI);
+                    }
+
+                    if (inventoryGridUI != null)
+                    {
+                        StartCoroutine(RefreshInventoryGridUiNextFrame(inventoryGridUI));
+                    }
+                }
+                else
+                {
+                    Debug.LogWarning(
+                        $"[ComputerMinigame] Sell succeeded but local inventory removal failed. itemId='{responseItemId}', owner='{ownerPlayerId}'.",
+                        this);
+                }
+            }
+
             string message = response.success && response.payoutAmount > 0
                 ? $"Sold 1 item for ${response.payoutAmount}."
                 : "Sell unavailable.";
@@ -351,6 +382,15 @@ namespace Game.Minigames
             EventBus.Publish(new PlayerFeedbackEvent(message));
             UpdateStatusMessage(message);
             RefreshUiRuntimeState();
+        }
+
+        private static System.Collections.IEnumerator RefreshInventoryGridUiNextFrame(InventoryGridUI inventoryGridUI)
+        {
+            yield return null;
+            if (inventoryGridUI != null)
+            {
+                inventoryGridUI.ForceRefreshInventoryAndHeldItem();
+            }
         }
 
         private void OnOwnerStolenLootSnapshotApplied(string ownerKey)

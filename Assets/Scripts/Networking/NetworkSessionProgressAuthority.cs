@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using Game.Core;
 using Game.Core.Events;
+using Game.Interaction;
 using Game.Minigames;
 using Game.Player;
 using Game.Systems;
@@ -46,6 +47,14 @@ namespace Game.Networking
             public string reason;
             public int spentCurrency;
             public int resultingTier;
+        }
+
+        public struct TrackedLootDropResponse
+        {
+            public ulong requestId;
+            public string itemId;
+            public bool success;
+            public string reason;
         }
 
         public struct NpcCatchTriggeredResponse
@@ -97,6 +106,7 @@ namespace Game.Networking
         public static event Action<JobInteractableStartResponse> OnJobInteractableStartResponse;
         public static event Action<StolenLootSellItemResponse> OnStolenLootSellItemResponse;
         public static event Action<UpgradePurchaseResponse> OnUpgradePurchaseResponse;
+        public static event Action<TrackedLootDropResponse> OnTrackedLootDropResponse;
         public static event Action<NpcCatchTriggeredResponse> OnNpcCatchTriggeredResponse;
         public static event Action<NpcLieResolutionResponse> OnNpcLieResolutionResponse;
         public static event Action<CleaningResultResolutionResponse> OnCleaningResultResolutionResponse;
@@ -122,9 +132,15 @@ namespace Game.Networking
         [SerializeField] private float _syncIntervalSeconds = 0.25f;
         [SerializeField] private bool _enableLogs;
         [SerializeField] private float _cleaningSessionTimeoutSeconds = 45f;
+        private const string GoldRingItemId = "wedding_ring_gold";
+        private const string SilverRingItemId = "wedding_ring_silver";
+        private const string GoldRingDropPrefabResourcesPath = "Prefabs/GameplayCritical/GoldRingPickup_Net";
+        private const string SilverRingDropPrefabResourcesPath = "Prefabs/GameplayCritical/SilverRingPickup_Net";
 
         private static NetworkSessionProgressAuthority _localRequester;
         private static NetworkSessionProgressAuthority _authoritativePublisher;
+        private static GameObject _cachedGoldRingDropNetworkPrefab;
+        private static GameObject _cachedSilverRingDropNetworkPrefab;
 
         private readonly NetworkVariable<int> _currentDay = new NetworkVariable<int>(
             1, NetworkVariableReadPermission.Everyone, NetworkVariableWritePermission.Server);
@@ -572,6 +588,37 @@ namespace Game.Networking
             RequestPurchaseUpgradeServerRpc(normalizedUpgradeId);
         }
 
+        public void RequestTrackedLootDrop(string itemId, Vector3 worldPosition, Quaternion worldRotation, ulong requestId)
+        {
+            if (!IsSpawned)
+            {
+                return;
+            }
+
+            string normalizedItemId = string.IsNullOrWhiteSpace(itemId)
+                ? string.Empty
+                : itemId.Trim();
+            if (string.IsNullOrEmpty(normalizedItemId))
+            {
+                return;
+            }
+
+            if (IsServer)
+            {
+                if (TryGetAuthoritativePublisher(out NetworkSessionProgressAuthority authoritativePublisher)
+                    && !ReferenceEquals(authoritativePublisher, this))
+                {
+                    authoritativePublisher.ExecuteTrackedLootDrop(OwnerClientId, normalizedItemId, worldPosition, worldRotation, requestId);
+                    return;
+                }
+
+                ExecuteTrackedLootDrop(OwnerClientId, normalizedItemId, worldPosition, worldRotation, requestId);
+                return;
+            }
+
+            RequestTrackedLootDropServerRpc(normalizedItemId, worldPosition, worldRotation, requestId);
+        }
+
         public void RequestComputerSessionStart(string stationKey)
         {
             if (!IsSpawned)
@@ -837,6 +884,29 @@ namespace Game.Networking
             ServerRpcParams serverRpcParams = default)
         {
             ExecutePurchaseUpgrade(upgradeId, serverRpcParams.Receive.SenderClientId);
+        }
+
+        [ServerRpc(RequireOwnership = false)]
+        private void RequestTrackedLootDropServerRpc(
+            string itemId,
+            Vector3 worldPosition,
+            Quaternion worldRotation,
+            ulong requestId,
+            ServerRpcParams serverRpcParams = default)
+        {
+            if (TryGetAuthoritativePublisher(out NetworkSessionProgressAuthority authoritativePublisher)
+                && !ReferenceEquals(authoritativePublisher, this))
+            {
+                authoritativePublisher.ExecuteTrackedLootDrop(
+                    serverRpcParams.Receive.SenderClientId,
+                    itemId,
+                    worldPosition,
+                    worldRotation,
+                    requestId);
+                return;
+            }
+
+            ExecuteTrackedLootDrop(serverRpcParams.Receive.SenderClientId, itemId, worldPosition, worldRotation, requestId);
         }
 
         [ServerRpc(RequireOwnership = false)]
@@ -1284,6 +1354,91 @@ namespace Game.Networking
                 success ? spentCurrency : 0,
                 resultingTier,
                 BuildTargetClientRpcParams(senderClientId));
+        }
+
+        private void ExecuteTrackedLootDrop(
+            ulong senderClientId,
+            string itemId,
+            Vector3 worldPosition,
+            Quaternion worldRotation,
+            ulong requestId)
+        {
+            if (!IsServer || !IsSpawned)
+            {
+                return;
+            }
+
+            string normalizedItemId = string.IsNullOrWhiteSpace(itemId)
+                ? string.Empty
+                : itemId.Trim();
+
+            if (string.IsNullOrEmpty(normalizedItemId))
+            {
+                SendTrackedLootDropResponseClientRpc(requestId, string.Empty, false, "Invalid item id.", BuildTargetClientRpcParams(senderClientId));
+                return;
+            }
+
+            GameManager gameManager = GameManager.Instance;
+            if (gameManager == null || gameManager.IsRunFailed() || gameManager.GetCurrentRunPhase() != GameManager.RunPhase.Work)
+            {
+                SendTrackedLootDropResponseClientRpc(requestId, normalizedItemId, false, "Drop unavailable.", BuildTargetClientRpcParams(senderClientId));
+                return;
+            }
+
+            if (!gameManager.IsTrackedStolenLootItem(normalizedItemId))
+            {
+                SendTrackedLootDropResponseClientRpc(requestId, normalizedItemId, false, "Item is not droppable.", BuildTargetClientRpcParams(senderClientId));
+                return;
+            }
+
+            string ownerKey = ResolveOwnerPlayerIdFromSender(senderClientId);
+            if (gameManager.GetStolenLootCountForItem(normalizedItemId, ownerKey) <= 0)
+            {
+                SendTrackedLootDropResponseClientRpc(requestId, normalizedItemId, false, "Item unavailable.", BuildTargetClientRpcParams(senderClientId));
+                return;
+            }
+
+            if (!TryResolveTrackedLootNetworkDropPrefab(normalizedItemId, out GameObject dropPrefab) || dropPrefab == null)
+            {
+                SendTrackedLootDropResponseClientRpc(requestId, normalizedItemId, false, "Drop prefab missing.", BuildTargetClientRpcParams(senderClientId));
+                return;
+            }
+
+            GameObject instance = Instantiate(dropPrefab, worldPosition, worldRotation);
+            if (instance == null)
+            {
+                SendTrackedLootDropResponseClientRpc(requestId, normalizedItemId, false, "Failed to spawn drop.", BuildTargetClientRpcParams(senderClientId));
+                return;
+            }
+
+            if (!instance.TryGetComponent(out NetworkObject networkObject))
+            {
+                Destroy(instance);
+                SendTrackedLootDropResponseClientRpc(requestId, normalizedItemId, false, "Drop prefab missing NetworkObject.", BuildTargetClientRpcParams(senderClientId));
+                return;
+            }
+
+            if (!instance.TryGetComponent(out InteractableItem interactableItem))
+            {
+                Destroy(instance);
+                SendTrackedLootDropResponseClientRpc(requestId, normalizedItemId, false, "Drop prefab missing InteractableItem.", BuildTargetClientRpcParams(senderClientId));
+                return;
+            }
+
+            interactableItem.DisablePersistenceForRuntimeDrop();
+            networkObject.Spawn();
+            gameManager.TryUnregisterStolenLootForDrop(normalizedItemId, ownerKey, 1);
+            PushOwnerStolenLootSnapshotToClient(senderClientId, ownerKey);
+            SyncFromGameManager(forceTaskSnapshot: true);
+
+            if (_enableLogs)
+            {
+                Debug.Log(
+                    $"[NetworkSessionProgressAuthority] Spawned network drop '{normalizedItemId}' for client {senderClientId} at {worldPosition}.",
+                    this);
+            }
+
+            SendTrackedLootDropResponseClientRpc(requestId, normalizedItemId, true, string.Empty, BuildTargetClientRpcParams(senderClientId));
         }
 
         private void ExecuteComputerSessionStart(ulong senderClientId, string stationKey)
@@ -2054,6 +2209,25 @@ namespace Game.Networking
         }
 
         [ClientRpc]
+        private void SendTrackedLootDropResponseClientRpc(
+            ulong requestId,
+            string itemId,
+            bool success,
+            string reason,
+            ClientRpcParams clientRpcParams = default)
+        {
+            TrackedLootDropResponse response = new TrackedLootDropResponse
+            {
+                requestId = requestId,
+                itemId = itemId,
+                success = success,
+                reason = reason
+            };
+
+            OnTrackedLootDropResponse?.Invoke(response);
+        }
+
+        [ClientRpc]
         private void SendComputerSessionStartResponseClientRpc(
             string stationKey,
             bool approved,
@@ -2395,6 +2569,32 @@ namespace Game.Networking
         private static string ResolveOwnerPlayerIdFromSender(ulong senderClientId)
         {
             return NetworkOwnerKeyUtility.GetOwnerKeyForSender(senderClientId);
+        }
+
+        private static bool TryResolveTrackedLootNetworkDropPrefab(string itemId, out GameObject prefab)
+        {
+            prefab = null;
+            if (string.IsNullOrWhiteSpace(itemId))
+            {
+                return false;
+            }
+
+            string normalizedItemId = itemId.Trim();
+            if (string.Equals(normalizedItemId, GoldRingItemId, StringComparison.Ordinal))
+            {
+                _cachedGoldRingDropNetworkPrefab ??= Resources.Load<GameObject>(GoldRingDropPrefabResourcesPath);
+                prefab = _cachedGoldRingDropNetworkPrefab;
+                return prefab != null;
+            }
+
+            if (string.Equals(normalizedItemId, SilverRingItemId, StringComparison.Ordinal))
+            {
+                _cachedSilverRingDropNetworkPrefab ??= Resources.Load<GameObject>(SilverRingDropPrefabResourcesPath);
+                prefab = _cachedSilverRingDropNetworkPrefab;
+                return prefab != null;
+            }
+
+            return false;
         }
 
         private bool TryStartCleaningSession(

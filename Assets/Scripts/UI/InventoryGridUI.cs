@@ -8,6 +8,7 @@ using Game.Input;
 using Game.Player;
 using Game.Interaction;
 using Game.Minigames;
+using Game.Networking;
 
 namespace Game.UI
 {
@@ -165,6 +166,13 @@ namespace Game.UI
         private bool _hasLoggedMissingHeldItemAnchor;
         private static bool _hasLoggedMissingHeldItemAnchorSession;
         private string _lastHeldItemAnchorBindFailureReason = string.Empty;
+        private bool _awaitingNetworkDropResponse;
+        private ulong _pendingNetworkDropRequestId;
+        private string _pendingNetworkDropItemId = string.Empty;
+        private int _pendingNetworkDropGridX = -1;
+        private int _pendingNetworkDropGridY = -1;
+        private string _pendingNetworkDropOwnerPlayerId = string.Empty;
+        private static ulong _networkDropRequestSequence;
 
         private void Awake()
         {
@@ -190,6 +198,7 @@ namespace Game.UI
             RegisterLocalContext();
             TrySubscribe();
             TrySubscribeInput();
+            NetworkSessionProgressAuthority.OnTrackedLootDropResponse += HandleTrackedLootDropResponse;
             TryRefreshHeldItemAnchorBinding();
             StartCoroutine(DelayedInitialRefresh());
         }
@@ -199,9 +208,11 @@ namespace Game.UI
             PlayerContextRegistry.Unregister(this, LocalPlayerId);
             Unsubscribe();
             UnsubscribeInput();
+            NetworkSessionProgressAuthority.OnTrackedLootDropResponse -= HandleTrackedLootDropResponse;
             ClearHeldItemObject();
             ClearPreviewObject();
             DisablePreviewImage();
+            ClearPendingNetworkDropRequest();
         }
 
         private void OnDestroy()
@@ -235,7 +246,7 @@ namespace Game.UI
 
         public void TryRefreshHeldItemAnchorBinding()
         {
-            if (!TryRebindHeldItemAnchorFromScene())
+            if (!TryRebindHeldItemAnchorFromScene(forceRebindForNetworkSession: true))
             {
                 return;
             }
@@ -364,6 +375,11 @@ namespace Game.UI
             RefreshHeldItemObject();
             RefreshSelectedItemPreview();
             SyncSelectedSlotToLocalContext();
+        }
+
+        public void ForceRefreshInventoryAndHeldItem()
+        {
+            RefreshAllSlots();
         }
 
         public int GetSelectedSlotIndex()
@@ -579,6 +595,26 @@ namespace Game.UI
                 spawned.transform.localRotation = Quaternion.identity;
                 PrepareVisualInstance(spawned);
                 NormalizeHeldItemInstance(spawned.transform);
+
+                if (!TryGetRendererBounds(spawned.transform, out _))
+                {
+                    Debug.LogWarning(
+                        $"[InventoryGridUI] Held visual for item '{selectedItem.ItemId}' has no enabled renderer bounds. Visual may be invisible.",
+                        this);
+                }
+            }
+            else
+            {
+                Debug.LogWarning(
+                    $"[InventoryGridUI] Selected item '{selectedItem.ItemId}' has no held/preview prefab. Held visual was not created.",
+                    this);
+            }
+
+            if (visualPrefab != null && spawned == null)
+            {
+                Debug.LogWarning(
+                    $"[InventoryGridUI] Held visual instantiation failed for item '{selectedItem.ItemId}'.",
+                    this);
             }
 
             _currentHeldItemItem = selectedItem;
@@ -740,6 +776,47 @@ namespace Game.UI
                 return false;
             }
 
+            if (IsNetworkSession())
+            {
+                if (_awaitingNetworkDropResponse)
+                {
+                    return false;
+                }
+
+                if (!NetworkSessionProgressAuthority.TryGetLocalRequester(out NetworkSessionProgressAuthority requester)
+                    || requester == null
+                    || !requester.IsSpawned)
+                {
+                    ClearPendingNetworkDropRequest();
+                    Debug.LogWarning("[InventoryGridUI] Cannot request network drop: NetworkSessionProgressAuthority requester is unavailable.", this);
+                    return false;
+                }
+
+                ulong requestId = ++_networkDropRequestSequence;
+                _awaitingNetworkDropResponse = true;
+                _pendingNetworkDropRequestId = requestId;
+                _pendingNetworkDropItemId = selectedItem.ItemId;
+                _pendingNetworkDropGridX = gridX;
+                _pendingNetworkDropGridY = gridY;
+                _pendingNetworkDropOwnerPlayerId = ownerPlayerId;
+
+                try
+                {
+                    requester.RequestTrackedLootDrop(selectedItem.ItemId, spawnPosition, spawnRotation, requestId);
+                }
+                catch (Exception exception)
+                {
+                    ClearPendingNetworkDropRequest();
+                    _pendingNetworkDropItemId = null;
+                    Debug.LogWarning(
+                        $"[InventoryGridUI] Failed to send tracked-loot drop request for '{selectedItem.ItemId}' requestId={requestId}: {exception.Message}",
+                        this);
+                    return false;
+                }
+
+                return true;
+            }
+
             InventoryItem removedItem = inventorySystem.RemoveItemAt(gridX, gridY, ownerPlayerId);
             if (removedItem == null)
             {
@@ -827,25 +904,7 @@ namespace Game.UI
 
         private bool TryComputeDropSpawnPose(out Vector3 position, out Quaternion rotation)
         {
-            Transform cameraTransform = null;
-            if (_heldItemAnchor != null && _heldItemAnchor.parent != null)
-            {
-                cameraTransform = _heldItemAnchor.parent;
-            }
-
-            if (cameraTransform == null)
-            {
-                PlayerContextLocator.TryGetLocalFirstPersonCamera(out FirstPersonCamera firstPersonCamera);
-                if (firstPersonCamera == null && PlayerContextLocator.IsCompatibilityFallbackAllowed())
-                {
-                    PlayerContextLocator.TryGetFirstPersonCamera(out firstPersonCamera);
-                }
-
-                if (firstPersonCamera != null)
-                {
-                    cameraTransform = firstPersonCamera.transform;
-                }
-            }
+            Transform cameraTransform = GetLocalOwnedCameraTransform();
 
             if (cameraTransform == null)
             {
@@ -979,12 +1038,12 @@ namespace Game.UI
 
         private Transform EnsureHeldItemAnchor()
         {
-            if (_heldItemAnchor != null)
+            if (IsHeldAnchorValidForLocalContext(_heldItemAnchor))
             {
                 return _heldItemAnchor;
             }
 
-            if (TryRebindHeldItemAnchorFromScene())
+            if (TryRebindHeldItemAnchorFromScene(forceRebindForNetworkSession: true))
             {
                 return _heldItemAnchor;
             }
@@ -1004,13 +1063,15 @@ namespace Game.UI
             return null;
         }
 
-        private bool TryRebindHeldItemAnchorFromScene()
+        private bool TryRebindHeldItemAnchorFromScene(bool forceRebindForNetworkSession = false)
         {
-            if (_heldItemAnchor != null)
+            if (!forceRebindForNetworkSession && IsHeldAnchorValidForLocalContext(_heldItemAnchor))
             {
                 _lastHeldItemAnchorBindFailureReason = string.Empty;
                 return true;
             }
+
+            _heldItemAnchor = null;
 
             PlayerContextLocator.TryGetLocalFirstPersonCamera(out FirstPersonCamera firstPersonCamera);
             if (firstPersonCamera == null && PlayerContextLocator.IsCompatibilityFallbackAllowed())
@@ -1043,6 +1104,215 @@ namespace Game.UI
             _hasLoggedMissingHeldItemAnchor = false;
             _lastHeldItemAnchorBindFailureReason = string.Empty;
             return true;
+        }
+
+        private bool IsHeldAnchorValidForLocalContext(Transform anchor)
+        {
+            if (anchor == null || anchor.parent == null)
+            {
+                return false;
+            }
+
+            Transform localCamera = GetLocalOwnedCameraTransform();
+            if (localCamera == null)
+            {
+                return false;
+            }
+
+            return ReferenceEquals(anchor.parent, localCamera)
+                   && string.Equals(anchor.name, HeldItemAnchorChildName, StringComparison.Ordinal);
+        }
+
+        private Transform GetLocalOwnedCameraTransform()
+        {
+            PlayerContextLocator.TryGetLocalFirstPersonCamera(out FirstPersonCamera firstPersonCamera);
+            if (firstPersonCamera == null && PlayerContextLocator.IsCompatibilityFallbackAllowed())
+            {
+                PlayerContextLocator.TryGetFirstPersonCamera(out firstPersonCamera);
+            }
+
+            return firstPersonCamera != null ? firstPersonCamera.transform : null;
+        }
+
+        private static bool IsNetworkSession()
+        {
+            Unity.Netcode.NetworkManager manager = Unity.Netcode.NetworkManager.Singleton;
+            return manager != null && manager.IsListening;
+        }
+
+        private void HandleTrackedLootDropResponse(NetworkSessionProgressAuthority.TrackedLootDropResponse response)
+        {
+            if (!_awaitingNetworkDropResponse)
+            {
+                Debug.LogWarning(
+                    $"[InventoryGridUI] Ignored tracked-loot drop response requestId={response.requestId} itemId='{response.itemId}' because no pending request is active.",
+                    this);
+                return;
+            }
+
+            if (response.requestId != _pendingNetworkDropRequestId)
+            {
+                Debug.LogWarning(
+                    $"[InventoryGridUI] Ignored tracked-loot drop response requestId={response.requestId} itemId='{response.itemId}'. Pending requestId={_pendingNetworkDropRequestId}.",
+                    this);
+                return;
+            }
+
+            if (!response.success)
+            {
+                Debug.LogWarning(
+                    $"[InventoryGridUI] Network drop failed for '{response.itemId}' requestId={response.requestId}: {response.reason}",
+                    this);
+                ClearPendingNetworkDropRequest();
+                return;
+            }
+
+            InventorySystem inventorySystem = InventorySystem.Instance;
+            if (inventorySystem == null)
+            {
+                ClearPendingNetworkDropRequest();
+                return;
+            }
+
+            InventoryItem removedItem = inventorySystem.RemoveItemAt(
+                _pendingNetworkDropGridX,
+                _pendingNetworkDropGridY,
+                _pendingNetworkDropOwnerPlayerId);
+
+            if (removedItem == null || !string.Equals(removedItem.ItemId, response.itemId, StringComparison.Ordinal))
+            {
+                Debug.LogWarning(
+                    $"[InventoryGridUI] Slot-first removal miss after successful network drop. " +
+                    $"requestId={response.requestId}, itemId='{response.itemId}', removedItem='{removedItem?.ItemId ?? "<null>"}', " +
+                    $"slot=({_pendingNetworkDropGridX},{_pendingNetworkDropGridY}), owner='{_pendingNetworkDropOwnerPlayerId}'.",
+                    this);
+
+                int removedCount = inventorySystem.RemoveItemsByItemId(response.itemId, 1, _pendingNetworkDropOwnerPlayerId);
+                if (removedCount <= 0)
+                {
+                    Debug.LogWarning(
+                        $"[InventoryGridUI] ItemId fallback removal miss after successful network drop. " +
+                        $"itemId='{response.itemId}', requestId={response.requestId}, " +
+                        $"slot=({_pendingNetworkDropGridX},{_pendingNetworkDropGridY}), owner='{_pendingNetworkDropOwnerPlayerId}', " +
+                        $"localOwner='{PlayerInventoryAuthority.GetLocalOwnerPlayerId()}'. Requesting snapshot refresh.",
+                        this);
+
+                    if (NetworkSessionProgressAuthority.TryGetLocalRequester(out NetworkSessionProgressAuthority requester)
+                        && requester != null
+                        && requester.IsSpawned)
+                    {
+                        requester.RequestRefreshStolenLootSnapshot();
+                    }
+                }
+            }
+
+            ReconcileTrackedValuableInventoryCount(response.itemId, _pendingNetworkDropOwnerPlayerId, response.requestId);
+            RefreshAllSlots();
+            ClearPendingNetworkDropRequest();
+        }
+
+        private void ReconcileTrackedValuableInventoryCount(string itemId, string ownerPlayerId, ulong requestId)
+        {
+            if (string.IsNullOrWhiteSpace(itemId))
+            {
+                return;
+            }
+
+            GameManager gameManager = GameManager.Instance;
+            InventorySystem inventorySystem = InventorySystem.Instance;
+            if (gameManager == null || inventorySystem == null)
+            {
+                return;
+            }
+
+            if (!gameManager.IsTrackedStolenLootItem(itemId))
+            {
+                return;
+            }
+
+            int localCount = CountLocalInventoryItemsById(inventorySystem, itemId);
+            int authoritativeCount = CountAuthoritativeTrackedLootById(gameManager, ownerPlayerId, itemId);
+            int excess = localCount - authoritativeCount;
+            if (excess <= 0)
+            {
+                return;
+            }
+
+            int removed = inventorySystem.RemoveItemsByItemId(itemId, excess, ownerPlayerId);
+            Debug.LogWarning(
+                $"[InventoryGridUI] Reconciled tracked-valuable inventory after network drop. " +
+                $"itemId='{itemId}', requestId={requestId}, owner='{ownerPlayerId}', " +
+                $"localBefore={localCount}, authoritative={authoritativeCount}, removed={removed}.",
+                this);
+        }
+
+        private static int CountLocalInventoryItemsById(InventorySystem inventorySystem, string itemId)
+        {
+            if (inventorySystem == null || string.IsNullOrWhiteSpace(itemId))
+            {
+                return 0;
+            }
+
+            System.Collections.Generic.List<InventoryItem> localItems = inventorySystem.GetAllItems();
+            if (localItems == null || localItems.Count == 0)
+            {
+                return 0;
+            }
+
+            int count = 0;
+            for (int i = 0; i < localItems.Count; i++)
+            {
+                InventoryItem inventoryItem = localItems[i];
+                if (inventoryItem == null || !inventoryItem.IsValid())
+                {
+                    continue;
+                }
+
+                if (string.Equals(inventoryItem.ItemId, itemId, StringComparison.Ordinal))
+                {
+                    count++;
+                }
+            }
+
+            return count;
+        }
+
+        private static int CountAuthoritativeTrackedLootById(GameManager gameManager, string ownerPlayerId, string itemId)
+        {
+            if (gameManager == null || string.IsNullOrWhiteSpace(itemId))
+            {
+                return 0;
+            }
+
+            System.Collections.Generic.List<StolenLootEntryData> snapshot = gameManager.GetStolenLootThisDaySnapshot(ownerPlayerId);
+            if (snapshot == null || snapshot.Count == 0)
+            {
+                return 0;
+            }
+
+            int total = 0;
+            for (int i = 0; i < snapshot.Count; i++)
+            {
+                StolenLootEntryData entry = snapshot[i];
+                if (entry == null || !string.Equals(entry.itemId, itemId, StringComparison.Ordinal))
+                {
+                    continue;
+                }
+
+                total += Mathf.Max(0, entry.count);
+            }
+
+            return total;
+        }
+
+        private void ClearPendingNetworkDropRequest()
+        {
+            _awaitingNetworkDropResponse = false;
+            _pendingNetworkDropRequestId = 0UL;
+            _pendingNetworkDropItemId = string.Empty;
+            _pendingNetworkDropGridX = -1;
+            _pendingNetworkDropGridY = -1;
+            _pendingNetworkDropOwnerPlayerId = string.Empty;
         }
 
         private void RegisterLocalContext()

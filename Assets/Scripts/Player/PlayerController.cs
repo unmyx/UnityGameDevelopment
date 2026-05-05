@@ -263,6 +263,13 @@ namespace Game.Player
         {
             return _velocity;
         }
+
+        public void ResetMovementStateAfterTeleport()
+        {
+            _velocity = Vector3.zero;
+            _timeSinceLastGrounded = 0f;
+            _currentSpeed = 0f;
+        }
     }
 }
 

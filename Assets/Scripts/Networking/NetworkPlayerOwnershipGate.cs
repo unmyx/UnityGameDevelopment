@@ -1,9 +1,11 @@
 using Game.Interaction;
 using Game.Player;
+using Game.Systems;
 using System;
 using System.Collections.Generic;
 using Unity.Netcode;
 using UnityEngine;
+using UnityEngine.SceneManagement;
 
 namespace Game.Networking
 {
@@ -17,6 +19,9 @@ namespace Game.Networking
     {
         private const float SpawnOffsetSpacing = 2.5f;
         private const string SpawnMarkerPrefix = "PlayerSpawn";
+        private const float FallbackSpawnProbeHeight = 64f;
+        private const float FallbackSpawnProbeDistance = 256f;
+        private const float FallbackSpawnLift = 1.25f;
 
         private static string _cachedSpawnMarkerSceneName = string.Empty;
         private static readonly List<Transform> CachedSpawnMarkers = new List<Transform>();
@@ -40,6 +45,11 @@ namespace Game.Networking
         public override void OnNetworkSpawn()
         {
             CacheComponents();
+            if (IsServer)
+            {
+                SceneManager.sceneLoaded += OnSceneLoaded;
+            }
+
             ApplyServerAuthoritativeSpawnPlacementIfNeeded();
             ApplyOwnershipState(IsOwner);
 
@@ -63,6 +73,11 @@ namespace Game.Networking
 
         public override void OnNetworkDespawn()
         {
+            if (IsServer)
+            {
+                SceneManager.sceneLoaded -= OnSceneLoaded;
+            }
+
             ApplyOwnershipState(false);
 
             if (IsOwner)
@@ -174,12 +189,38 @@ namespace Game.Networking
                 _characterController.enabled = true;
             }
 
+            if (_playerController != null)
+            {
+                _playerController.ResetMovementStateAfterTeleport();
+            }
+
             _hasAppliedServerSpawnPlacement = true;
 
             Debug.Log(
                 $"[NetworkPlayerOwnershipGate] Server spawn placement applied for client {OwnerClientId} " +
                 $"at {spawnPosition} via {spawnSource}.",
                 this);
+        }
+
+        public override void OnDestroy()
+        {
+            if (IsServer)
+            {
+                SceneManager.sceneLoaded -= OnSceneLoaded;
+            }
+
+            base.OnDestroy();
+        }
+
+        private void OnSceneLoaded(Scene scene, LoadSceneMode mode)
+        {
+            if (!IsServer || !IsSpawned)
+            {
+                return;
+            }
+
+            _hasAppliedServerSpawnPlacement = false;
+            ApplyServerAuthoritativeSpawnPlacementIfNeeded();
         }
 
         private bool TryResolveSpawnPose(ulong ownerClientId, out Vector3 position, out Quaternion rotation, out string source)
@@ -264,20 +305,66 @@ namespace Game.Networking
 
         private Vector3 ResolveFallbackSpawnPosition(ulong ownerClientId)
         {
-            Vector3 basePosition = transform.position;
+            Vector3 basePosition = new Vector3(0f, 2f, 0f);
             NetworkManager manager = NetworkManager;
-            if (manager == null || ownerClientId == NetworkManager.ServerClientId)
+            if (manager == null)
             {
                 return basePosition;
             }
 
-            int slot = Mathf.Max(0, (int)ownerClientId - 1);
+            int slot = ownerClientId == NetworkManager.ServerClientId
+                ? 0
+                : Mathf.Max(1, (int)ownerClientId);
             int row = slot / 2;
             int column = slot % 2;
 
-            float offsetX = column == 0 ? -SpawnOffsetSpacing : SpawnOffsetSpacing;
-            float offsetZ = SpawnOffsetSpacing + (row * SpawnOffsetSpacing);
-            return basePosition + new Vector3(offsetX, 0f, offsetZ);
+            float offsetX = slot == 0
+                ? 0f
+                : (column == 0 ? -SpawnOffsetSpacing : SpawnOffsetSpacing);
+            float offsetZ = slot == 0
+                ? 0f
+                : SpawnOffsetSpacing + (row * SpawnOffsetSpacing);
+            Vector3 fallbackPosition = basePosition + new Vector3(offsetX, 0f, offsetZ);
+            return ResolveGroundValidatedFallbackPosition(fallbackPosition, ownerClientId);
+        }
+
+        private Vector3 ResolveGroundValidatedFallbackPosition(Vector3 fallbackPosition, ulong ownerClientId)
+        {
+            Vector3 probeOrigin = new Vector3(
+                fallbackPosition.x,
+                fallbackPosition.y + FallbackSpawnProbeHeight,
+                fallbackPosition.z);
+
+            int layerMask = ~0;
+            if (Physics.Raycast(probeOrigin, Vector3.down, out RaycastHit hit, FallbackSpawnProbeDistance, layerMask, QueryTriggerInteraction.Ignore))
+            {
+                if (IsLikelyDynamicHitRoot(hit.transform))
+                {
+                    Debug.LogWarning(
+                        $"[NetworkPlayerOwnershipGate] Fallback spawn probe for client {ownerClientId} hit dynamic object '{hit.transform.name}' on layer {hit.collider.gameObject.layer}. Using conservative grounded fallback anyway.",
+                        this);
+                }
+
+                return hit.point + (Vector3.up * FallbackSpawnLift);
+            }
+
+            Debug.LogWarning(
+                $"[NetworkPlayerOwnershipGate] Fallback spawn probe found no ground for client {ownerClientId} at xz=({fallbackPosition.x:0.00},{fallbackPosition.z:0.00}). Using raw fallback {fallbackPosition}.",
+                this);
+            return fallbackPosition;
+        }
+
+        private static bool IsLikelyDynamicHitRoot(Transform hitTransform)
+        {
+            if (hitTransform == null)
+            {
+                return false;
+            }
+
+            return hitTransform.GetComponentInParent<PlayerController>() != null
+                   || hitTransform.GetComponentInParent<NPCController>() != null
+                   || hitTransform.GetComponentInParent<NetworkObject>() != null
+                   || hitTransform.GetComponentInParent<InteractableItem>() != null;
         }
 
         private void LogOwnershipPresentationState(bool isOwner)

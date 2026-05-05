@@ -58,6 +58,12 @@ namespace Game.Networking
                 return false;
             }
 
+            if (!CanAcceptPickupForCapacity(senderClientId, out string capacityRejectReason))
+            {
+                rejectReason = capacityRejectReason;
+                return false;
+            }
+
             rejectReason = string.Empty;
             return true;
         }
@@ -86,6 +92,23 @@ namespace Game.Networking
                 }
 
                 _networkObject.Despawn(true);
+                return;
+            }
+
+            if (!CanAcceptPickupForCapacity(senderClientId, out string capacityRejectReason))
+            {
+                _consumed = false;
+                if (_interactableItem != null)
+                {
+                    _interactableItem.SetCanInteract(true);
+                }
+
+                if (_enableLogs)
+                {
+                    Debug.LogWarning(
+                        $"[NetworkLootPickupAuthority] Pickup rejected for client {senderClientId}: {capacityRejectReason}. item='{itemId}'.");
+                }
+
                 return;
             }
 
@@ -118,15 +141,57 @@ namespace Game.Networking
             _networkObject.Despawn(true);
         }
 
+        private static bool CanAcceptPickupForCapacity(ulong senderClientId, out string rejectReason)
+        {
+            rejectReason = string.Empty;
+
+            GameManager gameManager = GameManager.Instance;
+            if (gameManager == null)
+            {
+                return true;
+            }
+
+            if (gameManager.GetCurrentRunPhase() != GameManager.RunPhase.Work || gameManager.IsRunFailed())
+            {
+                return true;
+            }
+
+            string ownerKey = NetworkOwnerKeyUtility.GetOwnerKeyForSender(senderClientId);
+            int trackedHeld = 0;
+            System.Collections.Generic.List<StolenLootEntryData> snapshot = gameManager.GetStolenLootThisDaySnapshot(ownerKey);
+            if (snapshot != null)
+            {
+                for (int i = 0; i < snapshot.Count; i++)
+                {
+                    StolenLootEntryData entry = snapshot[i];
+                    if (entry == null)
+                    {
+                        continue;
+                    }
+
+                    trackedHeld += Mathf.Max(0, entry.count);
+                }
+            }
+            int capacity = Mathf.Max(0, gameManager.GetUnlockedQuickSlots());
+            if (trackedHeld >= capacity)
+            {
+                rejectReason = $"tracked_capacity_full ({trackedHeld}/{capacity})";
+                return false;
+            }
+
+            return true;
+        }
+
         [ClientRpc]
         private void GrantPickupClientRpc(string itemId, bool countsAsStolenLoot, ClientRpcParams clientRpcParams = default)
         {
+            ulong localClientId = NetworkManager.Singleton != null ? NetworkManager.Singleton.LocalClientId : 0UL;
             InventorySystem inventorySystem = InventorySystem.Instance;
             if (inventorySystem == null)
             {
                 if (_enableLogs)
                 {
-                    Debug.LogWarning("[NetworkLootPickupAuthority] Pickup grant failed: InventorySystem missing.");
+                    Debug.LogWarning($"[NetworkLootPickupAuthority] Pickup grant failed on client {localClientId} for item '{itemId}': InventorySystem missing.");
                 }
                 return;
             }
@@ -136,7 +201,7 @@ namespace Game.Networking
             {
                 if (_enableLogs)
                 {
-                    Debug.LogWarning($"[NetworkLootPickupAuthority] Pickup grant failed: item asset not found for '{itemId}'.");
+                    Debug.LogWarning($"[NetworkLootPickupAuthority] Pickup grant failed on client {localClientId} for item '{itemId}': item asset not found.");
                 }
                 return;
             }
@@ -148,9 +213,14 @@ namespace Game.Networking
             {
                 if (_enableLogs)
                 {
-                    Debug.LogWarning($"[NetworkLootPickupAuthority] Pickup grant failed: InventorySystem.AddItem rejected '{itemId}'.");
+                    Debug.LogWarning($"[NetworkLootPickupAuthority] Pickup grant failed on client {localClientId} for item '{itemId}': InventorySystem.AddItem rejected.");
                 }
                 return;
+            }
+
+            if (_enableLogs)
+            {
+                Debug.Log($"[NetworkLootPickupAuthority] Pickup grant succeeded on client {localClientId} for item '{itemId}'.");
             }
 
             EventBus.Publish(new ItemPickedUpEvent(itemAsset.ItemName));
