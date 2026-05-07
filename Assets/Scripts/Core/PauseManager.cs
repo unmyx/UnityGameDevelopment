@@ -4,6 +4,7 @@ using Game.Inventory;
 using Game.Minigames;
 using Game.Player;
 using Unity.Netcode;
+using UnityEngine.SceneManagement;
 
 namespace Game.Core
 {
@@ -11,6 +12,7 @@ namespace Game.Core
     /// PauseManager handles pause/resume logic globally.
     /// Detects ESC key, manages Time.timeScale, fires pause/resume events.
     /// </summary>
+    [DefaultExecutionOrder(-1000)]
     public class PauseManager : MonoBehaviour
     {
         private const string PauseCursorAuthorityOwner = "pause_menu";
@@ -21,6 +23,9 @@ namespace Game.Core
         private static PauseManager _instance;
         private static bool _hasLoggedMissingInstance;
         private static bool _isShuttingDown;
+        private static bool _hasLoggedFallbackInstanceLookup;
+        private static bool _hasLoggedAutoSaveFallbackDependencyLookup;
+        private static string _instanceBindingSource = "unbound";
         public static PauseManager Instance
         {
             get
@@ -58,6 +63,10 @@ namespace Game.Core
             }
 
             _instance = FindAnyObjectByType<PauseManager>();
+            if (_instance != null)
+            {
+                LogFallbackInstanceLookup(_instance, "TryGetInstance");
+            }
             instance = _instance;
             return instance != null;
         }
@@ -93,6 +102,7 @@ namespace Game.Core
             }
 
             _instance = this;
+            _instanceBindingSource = "Awake";
             _hasLoggedMissingInstance = false;
             DetachFromParentIfNeeded();
             DontDestroyOnLoad(gameObject);
@@ -240,8 +250,20 @@ namespace Game.Core
                 return false;
             }
 
-            return Object.FindAnyObjectByType<InventorySystem>() != null
-                   && ObjectiveManager.TryGetInstance(out _);
+            InventorySystem inventorySystem = Object.FindAnyObjectByType<InventorySystem>();
+            bool hasInventorySystem = inventorySystem != null;
+            bool hasObjectiveManager = ObjectiveManager.TryGetInstance(out ObjectiveManager objectiveManager);
+
+            if ((hasInventorySystem || hasObjectiveManager) && !_hasLoggedAutoSaveFallbackDependencyLookup)
+            {
+                _hasLoggedAutoSaveFallbackDependencyLookup = true;
+                Debug.Log(
+                    $"[PauseManager] Autosave dependency lookup used scene-wide fallback discovery in scene '{SceneManager.GetActiveScene().name}'. " +
+                    $"InventorySystem={(hasInventorySystem ? inventorySystem.name : "null")}, ObjectiveManager={(hasObjectiveManager ? objectiveManager.name : "null")}. " +
+                    "Behavior remains permissive for bootstrap/recovery compatibility.");
+            }
+
+            return hasInventorySystem && hasObjectiveManager;
         }
 
         private static void TryAutoSave()
@@ -286,6 +308,31 @@ namespace Game.Core
                 Cursor.visible = _cursorVisibleBeforePause;
                 _hasCursorStateBeforePause = false;
             }
+        }
+
+        [System.Diagnostics.Conditional("UNITY_EDITOR")]
+        [System.Diagnostics.Conditional("DEVELOPMENT_BUILD")]
+        private static void LogFallbackInstanceLookup(PauseManager resolvedInstance, string callsite)
+        {
+            if (_hasLoggedFallbackInstanceLookup || resolvedInstance == null)
+            {
+                return;
+            }
+
+            _hasLoggedFallbackInstanceLookup = true;
+            NetworkManager networkManager = NetworkManager.Singleton;
+            string netMode = "offline";
+            if (networkManager != null && networkManager.IsListening)
+            {
+                netMode = networkManager.IsServer
+                    ? (networkManager.IsClient ? "host" : "server")
+                    : "client";
+            }
+
+            Debug.LogWarning(
+                $"[PauseManager] Fallback instance scan used at '{callsite}' in scene '{SceneManager.GetActiveScene().name}' ({netMode}). " +
+                $"Resolved '{resolvedInstance.name}' via FindAnyObjectByType. BindingSource={_instanceBindingSource}. " +
+                "Behavior remains permissive for bootstrap/recovery compatibility.");
         }
     }
 }

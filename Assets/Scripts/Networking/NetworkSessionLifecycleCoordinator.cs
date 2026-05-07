@@ -156,7 +156,7 @@ namespace Game.Networking
             if (SceneManager.GetActiveScene().IsValid()
                 && !string.Equals(SceneManager.GetActiveScene().name, MenuSceneName, System.StringComparison.Ordinal))
             {
-                SceneManager.LoadScene(MenuSceneName);
+                NetworkSafeSceneRouter.TryRouteToMenu(this, allowClientLocalLoad: true);
             }
         }
     }

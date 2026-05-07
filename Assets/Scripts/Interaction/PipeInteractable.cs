@@ -133,7 +133,11 @@ namespace Game.Interaction
         {
             if (!TryResolveRequiredReferences(out string validationError))
             {
-                Debug.LogError($"[PipeInteractable] Blocking cleaning minigame start: {validationError}", this);
+                Debug.LogError(
+                    $"[PipeInteractable] Blocking cleaning minigame start on '{name}'. " +
+                    $"Context: taskType='{DailyTaskType}', minigameId='{MinigameId}'. " +
+                    $"{validationError}",
+                    this);
                 return null;
             }
 
@@ -434,32 +438,45 @@ namespace Game.Interaction
             List<string> failures = new List<string>(7);
             if (_cleaningCanvas == null)
             {
-                failures.Add("missing CleaningCanvas reference");
+                failures.Add(
+                    $"Missing required field '_cleaningCanvas' on '{name}'. " +
+                    "This prefab may intentionally keep UI refs null, but the active scene instance must assign the canvas " +
+                    "or a local child resolver must provide it before start.");
             }
 
             if (_timerText == null)
             {
-                failures.Add("missing cleaning TimerText reference");
+                failures.Add(
+                    $"Missing required field '_timerText' on '{name}'. " +
+                    "The active scene instance must assign TimerText or a local child resolver must provide it.");
             }
 
             if (_progressText == null)
             {
-                failures.Add("missing cleaning ProgressText reference");
+                failures.Add(
+                    $"Missing required field '_progressText' on '{name}'. " +
+                    "The active scene instance must assign ProgressText or a local child resolver must provide it.");
             }
 
             if (_worldCleaningSurfaceRoot == null)
             {
-                failures.Add("missing CleaningSurfaces root");
+                failures.Add(
+                    $"Missing required field '_worldCleaningSurfaceRoot' on '{name}' (CleaningSurfaces root). " +
+                    "Scene/prefab instance wiring is incomplete for cleaning task surfaces.");
             }
 
             if (_stationCameraPose == null)
             {
-                failures.Add("missing MinigameCameraPose");
+                failures.Add(
+                    $"Missing required field '_stationCameraPose' on '{name}' (MinigameCameraPose). " +
+                    "Scene/prefab instance wiring is incomplete for cleaning camera handoff.");
             }
 
             if (_stationCameraLookTarget == null)
             {
-                failures.Add("missing MinigameLookTarget");
+                failures.Add(
+                    $"Missing required field '_stationCameraLookTarget' on '{name}' (MinigameLookTarget). " +
+                    "Scene/prefab instance wiring is incomplete for cleaning camera handoff.");
             }
 
             if (_worldCleaningSurfaceRoot != null)
@@ -467,7 +484,9 @@ namespace Game.Interaction
                 int activeSurfaceCount = CountActiveCleaningSurfaces(_worldCleaningSurfaceRoot);
                 if (activeSurfaceCount <= 0)
                 {
-                    failures.Add("CleaningSurfaces has zero active collidable surfaces");
+                    failures.Add(
+                        $"Field '_worldCleaningSurfaceRoot' on '{name}' has zero active collidable surfaces. " +
+                        "Cleaning cannot start without at least one active surface.");
                 }
             }
 

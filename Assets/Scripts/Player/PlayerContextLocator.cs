@@ -3,6 +3,7 @@ using Game.UI;
 using UnityEngine;
 using System.Collections.Generic;
 using Unity.Netcode;
+using UnityEngine.SceneManagement;
 
 namespace Game.Player
 {
@@ -17,6 +18,7 @@ namespace Game.Player
         private static float _startupRealtime = -1f;
         private static bool _hasResolvedLocalContext;
         private static readonly HashSet<string> LoggedFallbackCallsites = new HashSet<string>();
+        private static readonly HashSet<string> LoggedFallbackDetails = new HashSet<string>();
 
         public static bool TryGetPrimaryContext(out PlayerContext context)
         {
@@ -368,6 +370,15 @@ namespace Game.Player
                 inventoryGridUI,
                 gameplayHUD);
 
+            LogFallbackResolutionDetails(
+                "TryBuildSoloFallbackContext",
+                playerController,
+                firstPersonCamera,
+                inputHandler,
+                interactionSystem,
+                inventoryGridUI,
+                gameplayHUD);
+
             // TODO(MP-4): Remove scene-wide compatibility fallback scans after deterministic bootstrap/rebind is fully explicit per scene.
             context = _soloFallbackContext;
             return true;
@@ -382,7 +393,54 @@ namespace Game.Player
             }
 
             LoggedFallbackCallsites.Add(callsite);
-            Debug.Log($"[PlayerContextLocator] Compatibility fallback used at '{callsite}'. TODO(MP-4): remove after explicit bootstrap/rebind.");
+            string sceneName = SceneManager.GetActiveScene().name;
+            NetworkManager networkManager = NetworkManager.Singleton;
+            string netMode = "offline";
+            if (networkManager != null && networkManager.IsListening)
+            {
+                netMode = networkManager.IsServer
+                    ? (networkManager.IsClient ? "host" : "server")
+                    : "client";
+            }
+
+            if (_startupRealtime < 0f)
+            {
+                _startupRealtime = Time.realtimeSinceStartup;
+            }
+
+            bool bootstrapWindow = (Time.realtimeSinceStartup - _startupRealtime) <= BootstrapFallbackGraceSeconds;
+            string fallbackWindow = bootstrapWindow ? "bootstrap_window" : "recovery_window";
+            Debug.Log(
+                $"[PlayerContextLocator] Compatibility fallback used at '{callsite}' in scene '{sceneName}' ({netMode}, {fallbackWindow}). " +
+                "Fallback remains permissive for bootstrap/recovery compatibility. TODO(MP-4): remove after explicit bootstrap/rebind.");
+#endif
+        }
+
+        private static void LogFallbackResolutionDetails(
+            string callsite,
+            PlayerController playerController,
+            FirstPersonCamera firstPersonCamera,
+            PlayerInputHandler inputHandler,
+            InteractionSystem interactionSystem,
+            InventoryGridUI inventoryGridUI,
+            GameplayHUD gameplayHUD)
+        {
+#if UNITY_EDITOR || DEVELOPMENT_BUILD
+            if (string.IsNullOrEmpty(callsite) || LoggedFallbackDetails.Contains(callsite))
+            {
+                return;
+            }
+
+            LoggedFallbackDetails.Add(callsite);
+            string sceneName = SceneManager.GetActiveScene().name;
+            Debug.Log(
+                $"[PlayerContextLocator] Fallback scan resolution at '{callsite}' in scene '{sceneName}': " +
+                $"playerController={(playerController != null ? playerController.name : "null")}, " +
+                $"firstPersonCamera={(firstPersonCamera != null ? firstPersonCamera.name : "null")}, " +
+                $"inputHandler={(inputHandler != null ? inputHandler.name : "null")}, " +
+                $"interactionSystem={(interactionSystem != null ? interactionSystem.name : "null")}, " +
+                $"inventoryGridUI={(inventoryGridUI != null ? inventoryGridUI.name : "null")}, " +
+                $"gameplayHUD={(gameplayHUD != null ? gameplayHUD.name : "null")}.");
 #endif
         }
     }

@@ -1,6 +1,5 @@
 ﻿using UnityEngine;
 using UnityEngine.UI;
-using UnityEngine.SceneManagement;
 using UnityEngine.EventSystems;
 using Game.Core;
 using Game.Inventory;
@@ -49,12 +48,9 @@ namespace Game.UI
     /// </summary>
     public class MainMenuController : MonoBehaviour
     {
-        private const string NetworkSandboxSceneName = "NetworkSandbox";
         private const string DefaultNetworkAddress = "127.0.0.1";
         private const ushort DefaultNetworkPort = 7777;
         private const string DefaultRelayJoinCode = "";
-        private const string GameplaySceneName = "GameplayScene";
-        private const string HomeSceneName = "HomeScene";
 
         [SerializeField]
         private Button _startButton;
@@ -599,7 +595,7 @@ namespace Game.UI
             NetworkModeRuntime.RelayJoinCode = string.Empty;
             NetworkModeRuntime.LastStartupMessage = string.Empty;
 
-            SceneManager.LoadScene(NetworkSandboxSceneName);
+            NetworkSafeSceneRouter.TryRouteToNetworkSandbox(this, allowClientLocalLoad: true);
         }
 
         private void LaunchRelayHost()
@@ -608,7 +604,7 @@ namespace Game.UI
             NetworkModeRuntime.StartupMode = NetworkStartupMode.RelayHost;
             NetworkModeRuntime.RelayJoinCode = string.Empty;
             NetworkModeRuntime.LastStartupMessage = string.Empty;
-            SceneManager.LoadScene(NetworkSandboxSceneName);
+            NetworkSafeSceneRouter.TryRouteToNetworkSandbox(this, allowClientLocalLoad: true);
         }
 
         private void LaunchRelayClient()
@@ -625,7 +621,7 @@ namespace Game.UI
             NetworkModeRuntime.StartupMode = NetworkStartupMode.RelayClient;
             NetworkModeRuntime.RelayJoinCode = joinCode;
             NetworkModeRuntime.LastStartupMessage = string.Empty;
-            SceneManager.LoadScene(NetworkSandboxSceneName);
+            NetworkSafeSceneRouter.TryRouteToNetworkSandbox(this, allowClientLocalLoad: true);
         }
 
         private bool TryReadMultiplayerConnectionSettings(out string address, out ushort port, out string validationError)
@@ -964,13 +960,13 @@ namespace Game.UI
         private void StartGameplayScene()
         {
             HideGameOverPanel();
-            SceneManager.LoadScene(GameplaySceneName);
+            NetworkSafeSceneRouter.TryRouteToGameplay(this);
         }
 
         private void StartHomeScene()
         {
             HideGameOverPanel();
-            SceneManager.LoadScene(HomeSceneName);
+            NetworkSafeSceneRouter.TryRouteToHome(this);
         }
 
         private void RouteToSceneForSavedRunPhase(int savedRunPhase)

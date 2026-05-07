@@ -3,6 +3,8 @@ using System;
 using System.Collections.Generic;
 using Game.Core;
 using Game.Player;
+using Unity.Netcode;
+using UnityEngine.SceneManagement;
 
 namespace Game.Inventory
 {
@@ -35,11 +37,14 @@ namespace Game.Inventory
     /// - SwapItems(item1, item2) - for drag & drop
     /// - SaveInventory() / LoadInventory() - for save system
     /// </summary>
+    [DefaultExecutionOrder(-1000)]
     public class InventorySystem : MonoBehaviour
     {
         private const string ItemResourcesPath = "Items";
 
         private static InventorySystem _instance;
+        private static bool _hasLoggedFallbackInstanceLookup;
+        private static string _instanceBindingSource = "unbound";
         public static InventorySystem Instance
         {
             get
@@ -47,6 +52,10 @@ namespace Game.Inventory
                 if (_instance == null)
                 {
                     _instance = FindAnyObjectByType<InventorySystem>();
+                    if (_instance != null)
+                    {
+                        LogFallbackInstanceLookup(_instance, "Instance.get");
+                    }
                 }
                 return _instance;
             }
@@ -73,6 +82,7 @@ namespace Game.Inventory
             }
 
             _instance = this;
+            _instanceBindingSource = "Awake";
             DetachFromParentIfNeeded();
             DontDestroyOnLoad(gameObject);
             EnsureInitialized();
@@ -569,6 +579,32 @@ namespace Game.Inventory
 
                 _itemCacheById[item.ItemId] = item;
             }
+        }
+
+        [System.Diagnostics.Conditional("UNITY_EDITOR")]
+        [System.Diagnostics.Conditional("DEVELOPMENT_BUILD")]
+        private static void LogFallbackInstanceLookup(InventorySystem resolvedInstance, string callsite)
+        {
+            if (_hasLoggedFallbackInstanceLookup || resolvedInstance == null)
+            {
+                return;
+            }
+
+            _hasLoggedFallbackInstanceLookup = true;
+            string sceneName = SceneManager.GetActiveScene().name;
+            NetworkManager networkManager = NetworkManager.Singleton;
+            string netMode = "offline";
+            if (networkManager != null && networkManager.IsListening)
+            {
+                netMode = networkManager.IsServer
+                    ? (networkManager.IsClient ? "host" : "server")
+                    : "client";
+            }
+
+            Debug.LogWarning(
+                $"[InventorySystem] Fallback instance scan used at '{callsite}' in scene '{sceneName}' ({netMode}). " +
+                $"Resolved '{resolvedInstance.name}' via FindAnyObjectByType. BindingSource={_instanceBindingSource}. " +
+                "Behavior remains permissive for bootstrap/recovery compatibility.");
         }
     }
 }

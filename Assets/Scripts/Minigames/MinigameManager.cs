@@ -25,16 +25,11 @@ namespace Game.Minigames
         private const string PipePaintMinigameId = "pipe_paint";
         private const string DrillScrewMinigameId = "drill_screw";
         private const string FreeplayCursorAuthorityOwner = "freeplay_camera";
-        private const string MissingCleaningCanvasErrorMessage =
-            "[MinigameManager] Cannot start cleaning minigame: missing CleaningCanvas reference in the active scene.";
-        private const string MissingWeldingCanvasErrorMessage =
-            "[MinigameManager] Cannot start welding minigame: missing WeldingCanvas reference in the active scene.";
-        private const string MissingMeasureCutCanvasErrorMessage =
-            "[MinigameManager] Cannot start measure/cut minigame: missing MeasureCutCanvas reference in the active scene.";
-        private const string MissingPipePaintCanvasErrorMessage =
-            "[MinigameManager] Cannot start paint minigame: missing PipePaintCanvas reference in the active scene.";
-        private const string MissingDrillScrewCanvasErrorMessage =
-            "[MinigameManager] Cannot start drill/screw minigame: missing DrillScrewCanvas reference in the active scene.";
+        private const string MissingCleaningCanvasErrorMessage = "missing CleaningCanvas reference";
+        private const string MissingWeldingCanvasErrorMessage = "missing WeldingCanvas reference";
+        private const string MissingMeasureCutCanvasErrorMessage = "missing MeasureCutCanvas reference";
+        private const string MissingPipePaintCanvasErrorMessage = "missing PipePaintCanvas reference";
+        private const string MissingDrillScrewCanvasErrorMessage = "missing DrillScrewCanvas reference";
 
         private static MinigameManager _instance;
         private static int _managerLifetimeSequence;
@@ -119,7 +114,7 @@ namespace Game.Minigames
             ownerPlayerId = ResolveOwnerPlayerId(ownerPlayerId);
             data.ownerPlayerId = ownerPlayerId;
 
-            if (!ValidateCanvasRequirements(typeof(T), data))
+            if (!ValidateCanvasRequirements(typeof(T), data, ownerPlayerId))
             {
                 return null;
             }
@@ -183,7 +178,7 @@ namespace Game.Minigames
             ownerPlayerId = ResolveOwnerPlayerId(ownerPlayerId);
             data.ownerPlayerId = ownerPlayerId;
 
-            if (!ValidateCanvasRequirements(minigame.GetType(), data))
+            if (!ValidateCanvasRequirements(minigame.GetType(), data, ownerPlayerId))
             {
                 return null;
             }
@@ -413,45 +408,93 @@ namespace Game.Minigames
             }
         }
 
-        private bool ValidateCanvasRequirements(System.Type minigameType, MinigameData data)
+        private bool ValidateCanvasRequirements(System.Type minigameType, MinigameData data, string ownerPlayerId)
         {
             bool requiresCleaningCanvas = RequiresCleaningCanvas(minigameType, data);
             bool requiresWeldingCanvas = RequiresWeldingCanvas(minigameType, data);
             bool requiresMeasureCutCanvas = RequiresMeasureCutCanvas(minigameType, data);
             bool requiresPipePaintCanvas = RequiresPipePaintCanvas(minigameType, data);
             bool requiresDrillScrewCanvas = RequiresDrillScrewCanvas(minigameType, data);
+            string minigameId = data != null ? data.minigameId : string.Empty;
+            string sceneName = SceneManager.GetActiveScene().name;
+            string minigameTypeName = minigameType != null ? minigameType.Name : "UnknownMinigameType";
 
             if (requiresCleaningCanvas && _cleaningCanvas == null)
             {
-                Debug.LogError(MissingCleaningCanvasErrorMessage, this);
+                LogCanvasRequirementFailure(
+                    MissingCleaningCanvasErrorMessage,
+                    sceneName,
+                    minigameTypeName,
+                    minigameId,
+                    ownerPlayerId);
                 return false;
             }
 
             if (requiresWeldingCanvas && _weldingCanvas == null)
             {
-                Debug.LogError(MissingWeldingCanvasErrorMessage, this);
+                LogCanvasRequirementFailure(
+                    MissingWeldingCanvasErrorMessage,
+                    sceneName,
+                    minigameTypeName,
+                    minigameId,
+                    ownerPlayerId);
                 return false;
             }
 
             if (requiresMeasureCutCanvas && _measureCutCanvas == null)
             {
-                Debug.LogError(MissingMeasureCutCanvasErrorMessage, this);
+                LogCanvasRequirementFailure(
+                    MissingMeasureCutCanvasErrorMessage,
+                    sceneName,
+                    minigameTypeName,
+                    minigameId,
+                    ownerPlayerId);
                 return false;
             }
 
             if (requiresPipePaintCanvas && _pipePaintCanvas == null)
             {
-                Debug.LogError(MissingPipePaintCanvasErrorMessage, this);
+                LogCanvasRequirementFailure(
+                    MissingPipePaintCanvasErrorMessage,
+                    sceneName,
+                    minigameTypeName,
+                    minigameId,
+                    ownerPlayerId);
                 return false;
             }
 
             if (requiresDrillScrewCanvas && _drillScrewCanvas == null)
             {
-                Debug.LogError(MissingDrillScrewCanvasErrorMessage, this);
+                LogCanvasRequirementFailure(
+                    MissingDrillScrewCanvasErrorMessage,
+                    sceneName,
+                    minigameTypeName,
+                    minigameId,
+                    ownerPlayerId);
                 return false;
             }
 
             return true;
+        }
+
+        private void LogCanvasRequirementFailure(
+            string missingRequirement,
+            string sceneName,
+            string minigameTypeName,
+            string minigameId,
+            string ownerPlayerId)
+        {
+            string normalizedOwner = string.IsNullOrWhiteSpace(ownerPlayerId)
+                ? PlayerContextRegistry.DefaultLocalPlayerId
+                : ownerPlayerId.Trim();
+            string normalizedMinigameId = string.IsNullOrWhiteSpace(minigameId) ? "(unset)" : minigameId.Trim();
+            string normalizedScene = string.IsNullOrWhiteSpace(sceneName) ? "(unknown)" : sceneName.Trim();
+
+            Debug.LogError(
+                $"[MinigameManager] Cannot start minigame because {missingRequirement}. " +
+                $"scene='{normalizedScene}', minigameType='{minigameTypeName}', minigameId='{normalizedMinigameId}', ownerPlayerId='{normalizedOwner}', managerObject='{name}'. " +
+                "This likely means scene wiring or prefab instance wiring is incomplete.",
+                this);
         }
 
         private static bool RequiresCleaningCanvas(System.Type minigameType, MinigameData data)

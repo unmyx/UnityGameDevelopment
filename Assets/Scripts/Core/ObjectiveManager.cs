@@ -5,6 +5,7 @@ using Game.Inventory;
 using Game.Core.Events;
 using Game.Player;
 using Unity.Netcode;
+using UnityEngine.SceneManagement;
 
 namespace Game.Core
 {
@@ -41,6 +42,8 @@ namespace Game.Core
 
         private static ObjectiveManager _instance;
         private static bool _hasLoggedMissingInstance;
+        private static bool _hasLoggedFallbackInstanceLookup;
+        private static string _instanceBindingSource = "unbound";
         private static readonly Queue<RewardGrantedData> PendingRewardEvents = new Queue<RewardGrantedData>();
         private static bool _isReadyForRewardEvents;
         public static ObjectiveManager Instance
@@ -71,6 +74,10 @@ namespace Game.Core
             }
 
             _instance = FindAnyObjectByType<ObjectiveManager>();
+            if (_instance != null)
+            {
+                LogFallbackInstanceLookup(_instance, "TryGetInstance");
+            }
             instance = _instance;
             return instance != null;
         }
@@ -112,6 +119,7 @@ namespace Game.Core
             }
 
             _instance = this;
+            _instanceBindingSource = "Awake";
             _hasLoggedMissingInstance = false;
             DetachFromParentIfNeeded();
             DontDestroyOnLoad(gameObject);
@@ -714,6 +722,31 @@ namespace Game.Core
         {
             NetworkManager manager = NetworkManager.Singleton;
             return manager != null && manager.IsListening && manager.IsClient && !manager.IsServer;
+        }
+
+        [System.Diagnostics.Conditional("UNITY_EDITOR")]
+        [System.Diagnostics.Conditional("DEVELOPMENT_BUILD")]
+        private static void LogFallbackInstanceLookup(ObjectiveManager resolvedInstance, string callsite)
+        {
+            if (_hasLoggedFallbackInstanceLookup || resolvedInstance == null)
+            {
+                return;
+            }
+
+            _hasLoggedFallbackInstanceLookup = true;
+            NetworkManager networkManager = NetworkManager.Singleton;
+            string netMode = "offline";
+            if (networkManager != null && networkManager.IsListening)
+            {
+                netMode = networkManager.IsServer
+                    ? (networkManager.IsClient ? "host" : "server")
+                    : "client";
+            }
+
+            Debug.LogWarning(
+                $"[ObjectiveManager] Fallback instance scan used at '{callsite}' in scene '{SceneManager.GetActiveScene().name}' ({netMode}). " +
+                $"Resolved '{resolvedInstance.name}' via FindAnyObjectByType. BindingSource={_instanceBindingSource}. " +
+                "Behavior remains permissive for bootstrap/recovery compatibility.");
         }
     }
 

@@ -1,8 +1,8 @@
 using UnityEngine;
 using UnityEngine.UI;
-using UnityEngine.SceneManagement;
 using UnityEngine.EventSystems;
 using Game.Core;
+using Game.Networking;
 
 namespace Game.UI
 {
@@ -178,7 +178,7 @@ namespace Game.UI
             PauseManager pauseManager = PauseManager.Instance;
             if (pauseManager != null)
                 pauseManager.Resume();
-            SceneManager.LoadScene("Menu");
+            NetworkSafeSceneRouter.TryRouteToMenu(this, allowClientLocalLoad: true);
         }
 
         public void BackFromSettings()

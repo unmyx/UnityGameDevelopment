@@ -25,6 +25,7 @@ namespace Game.Networking
 
         private static string _cachedSpawnMarkerSceneName = string.Empty;
         private static readonly List<Transform> CachedSpawnMarkers = new List<Transform>();
+        private static readonly HashSet<string> LoggedFallbackProbeWarnings = new HashSet<string>();
 
         private PlayerController _playerController;
         private PlayerInputHandler _inputHandler;
@@ -336,22 +337,72 @@ namespace Game.Networking
                 fallbackPosition.z);
 
             int layerMask = ~0;
-            if (Physics.Raycast(probeOrigin, Vector3.down, out RaycastHit hit, FallbackSpawnProbeDistance, layerMask, QueryTriggerInteraction.Ignore))
+            RaycastHit[] hits = Physics.RaycastAll(
+                probeOrigin,
+                Vector3.down,
+                FallbackSpawnProbeDistance,
+                layerMask,
+                QueryTriggerInteraction.Ignore);
+
+            if (hits != null && hits.Length > 0)
             {
-                if (IsLikelyDynamicHitRoot(hit.transform))
+                Array.Sort(hits, (left, right) => left.distance.CompareTo(right.distance));
+
+                bool sawIgnoredDynamicHit = false;
+                for (int i = 0; i < hits.Length; i++)
                 {
-                    Debug.LogWarning(
-                        $"[NetworkPlayerOwnershipGate] Fallback spawn probe for client {ownerClientId} hit dynamic object '{hit.transform.name}' on layer {hit.collider.gameObject.layer}. Using conservative grounded fallback anyway.",
-                        this);
+                    RaycastHit hit = hits[i];
+                    Transform hitTransform = hit.transform;
+                    if (hitTransform == null)
+                    {
+                        continue;
+                    }
+
+                    if (IsSelfOrChildTransform(hitTransform) || IsLikelyDynamicHitRoot(hitTransform))
+                    {
+                        sawIgnoredDynamicHit = true;
+                        continue;
+                    }
+
+                    if (sawIgnoredDynamicHit)
+                    {
+                        LogFallbackProbeWarningOnce(
+                            ownerClientId,
+                            "dynamic_probe_hit_ignored",
+                            $"[NetworkPlayerOwnershipGate] Fallback spawn probe for client {ownerClientId} ignored dynamic/self hit(s) and selected static ground '{hitTransform.name}' on layer {hit.collider.gameObject.layer}.",
+                            this);
+                    }
+
+                    return hit.point + (Vector3.up * FallbackSpawnLift);
                 }
 
-                return hit.point + (Vector3.up * FallbackSpawnLift);
+                if (sawIgnoredDynamicHit)
+                {
+                    LogFallbackProbeWarningOnce(
+                        ownerClientId,
+                        "no_valid_ground_hit",
+                        $"[NetworkPlayerOwnershipGate] Fallback spawn probe for client {ownerClientId} found only dynamic/self hits at xz=({fallbackPosition.x:0.00},{fallbackPosition.z:0.00}). Using raw fallback {fallbackPosition}.",
+                        this);
+                    return fallbackPosition;
+                }
             }
 
-            Debug.LogWarning(
+            LogFallbackProbeWarningOnce(
+                ownerClientId,
+                "no_valid_ground_hit",
                 $"[NetworkPlayerOwnershipGate] Fallback spawn probe found no ground for client {ownerClientId} at xz=({fallbackPosition.x:0.00},{fallbackPosition.z:0.00}). Using raw fallback {fallbackPosition}.",
                 this);
             return fallbackPosition;
+        }
+
+        private bool IsSelfOrChildTransform(Transform candidate)
+        {
+            if (candidate == null)
+            {
+                return false;
+            }
+
+            return candidate == transform || candidate.IsChildOf(transform);
         }
 
         private static bool IsLikelyDynamicHitRoot(Transform hitTransform)
@@ -365,6 +416,20 @@ namespace Game.Networking
                    || hitTransform.GetComponentInParent<NPCController>() != null
                    || hitTransform.GetComponentInParent<NetworkObject>() != null
                    || hitTransform.GetComponentInParent<InteractableItem>() != null;
+        }
+
+        private static void LogFallbackProbeWarningOnce(ulong ownerClientId, string warningType, string message, UnityEngine.Object context)
+        {
+#if UNITY_EDITOR || DEVELOPMENT_BUILD
+            string sceneName = SceneManager.GetActiveScene().name;
+            string key = $"{sceneName}|{ownerClientId}|{warningType}";
+            if (!LoggedFallbackProbeWarnings.Add(key))
+            {
+                return;
+            }
+
+            Debug.LogWarning(message, context);
+#endif
         }
 
         private void LogOwnershipPresentationState(bool isOwner)

@@ -115,7 +115,11 @@ namespace Game.Interaction
         {
             if (!TryResolveRequiredReferences(out string validationError))
             {
-                Debug.LogError($"[WeldingInteractable] Blocking welding minigame start: {validationError}", this);
+                Debug.LogError(
+                    $"[WeldingInteractable] Blocking welding minigame start on '{name}'. " +
+                    $"Context: taskType='{DailyTaskType}', minigameId='{MinigameId}'. " +
+                    $"{validationError}",
+                    this);
                 return null;
             }
 
@@ -394,42 +398,66 @@ namespace Game.Interaction
             List<string> failures = new List<string>(7);
             if (_minigameCanvas == null)
             {
-                failures.Add("missing WeldingCanvas");
+                failures.Add(
+                    $"Missing required field '_minigameCanvas' on '{name}' (WeldingCanvas). " +
+                    "This prefab may intentionally keep UI refs null, but the active scene instance must assign the canvas " +
+                    "or a local child resolver must provide it before start.");
             }
 
             if (_coverageFillImage == null)
             {
-                failures.Add("missing coverage Fill image / progress UI");
+                failures.Add(
+                    $"Missing required field '_coverageFillImage' on '{name}'. " +
+                    "Welding coverage fill image is required for progress UI and start contract.");
             }
             else if (_coverageFillImage.type != Image.Type.Filled || _coverageFillImage.fillMethod != Image.FillMethod.Horizontal)
             {
-                failures.Add("coverage Fill image is not configured as Filled + Horizontal");
+                failures.Add(
+                    $"Field '_coverageFillImage' on '{name}' must be configured as Filled + Horizontal. " +
+                    $"Current type={_coverageFillImage.type}, fillMethod={_coverageFillImage.fillMethod}.");
+            }
+
+            if (_coverageText == null)
+            {
+                Debug.LogWarning(
+                    $"[WeldingInteractable] Optional field '_coverageText' is missing on '{name}'. " +
+                    "Welding can still run, but text coverage feedback UI will be degraded. " +
+                    "Assign it on the scene/prefab instance for full feedback.",
+                    this);
             }
 
             if (_timerText == null)
             {
-                failures.Add("missing welding TimerText reference");
+                failures.Add(
+                    $"Missing required field '_timerText' on '{name}'. " +
+                    "The active scene instance must assign TimerText or a local child resolver must provide it.");
             }
 
             if (_weldAnchorsRoot == null)
             {
-                failures.Add("missing WeldAnchors root");
+                failures.Add(
+                    $"Missing required field '_weldAnchorsRoot' on '{name}' (WeldAnchors root). " +
+                    "Scene/prefab instance wiring is incomplete for welding targets.");
             }
             else if (CountActiveChildren(_weldAnchorsRoot) == 0)
             {
-                failures.Add("WeldAnchors has zero active children");
+                failures.Add(
+                    $"Field '_weldAnchorsRoot' on '{name}' has zero active children. " +
+                    "Welding cannot start without active weld anchors.");
             }
 
             if (_useWorldStationView)
             {
                 if (_stationCameraPose == null)
                 {
-                    failures.Add("missing MinigameCameraPose while world view is enabled");
+                    failures.Add(
+                        $"Missing required field '_stationCameraPose' on '{name}' while world view is enabled.");
                 }
 
                 if (_stationCameraLookTarget == null)
                 {
-                    failures.Add("missing MinigameLookTarget while world view is enabled");
+                    failures.Add(
+                        $"Missing required field '_stationCameraLookTarget' on '{name}' while world view is enabled.");
                 }
             }
 
