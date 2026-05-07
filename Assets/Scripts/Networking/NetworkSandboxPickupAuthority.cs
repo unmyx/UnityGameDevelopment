@@ -5,6 +5,11 @@ namespace Game.Networking
     /// <summary>
     /// MP-9 sandbox authoritative interaction handler implementation.
     /// Executed via NetworkInteractionAuthorityBridge after server validation.
+    ///
+    /// Deferred cleanup note:
+    /// Sandbox-only MP-9 authority handler that is currently not wired in scene/prefab YAML.
+    /// If sandbox pickup flow is retired, remove this together with
+    /// NetworkSandboxPickupInteractable to keep the pair consistent.
     /// </summary>
     [DisallowMultipleComponent]
     [RequireComponent(typeof(Unity.Netcode.NetworkObject))]

@@ -67,6 +67,7 @@ namespace Game.Minigames
         private Vector3 _returnTransitionStartPosition;
         private Quaternion _returnTransitionStartRotation;
         private MinigameResult _pendingResult = MinigameResult.None;
+        private bool _hasLoggedCameraFallbackWarning;
         private bool _gameplayCameraWasEnabled;
         private bool _hasGameplayCameraRenderOverride;
 
@@ -740,11 +741,27 @@ namespace Game.Minigames
                 }
             }
 
+            if (PlayerContextLocator.TryGetLocalContext(out PlayerContext localContext)
+                && localContext != null
+                && localContext.FirstPersonCamera != null)
+            {
+                _gameplayViewCamera = localContext.FirstPersonCamera.GetComponent<Camera>();
+                if (_gameplayViewCamera != null)
+                {
+                    return _gameplayViewCamera;
+                }
+            }
+
             FirstPersonCamera firstPersonCamera = null;
             if (PlayerContextLocator.IsCompatibilityFallbackAllowed()
                 && PlayerContextLocator.TryGetFirstPersonCamera(out firstPersonCamera)
                 && firstPersonCamera != null)
             {
+                if (!_hasLoggedCameraFallbackWarning)
+                {
+                    _hasLoggedCameraFallbackWarning = true;
+                    Debug.LogWarning("[ComputerMinigame] Using compatibility fallback to resolve gameplay camera.", this);
+                }
                 _gameplayViewCamera = firstPersonCamera.GetComponent<Camera>();
                 if (_gameplayViewCamera != null)
                 {
@@ -755,6 +772,11 @@ namespace Game.Minigames
             if (PlayerContextLocator.IsCompatibilityFallbackAllowed())
             {
                 firstPersonCamera = FindAnyObjectByType<FirstPersonCamera>();
+                if (firstPersonCamera != null && !_hasLoggedCameraFallbackWarning)
+                {
+                    _hasLoggedCameraFallbackWarning = true;
+                    Debug.LogWarning("[ComputerMinigame] Using scene-wide FirstPersonCamera fallback.", this);
+                }
             }
 
             if (firstPersonCamera != null)

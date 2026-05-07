@@ -111,6 +111,7 @@ namespace Game.UI
         private string _lastFeedbackMessage = string.Empty;
         private bool _hasLoggedMissingPromptText;
         private bool _hasLoggedMissingInteractionSystem;
+        private bool _hasLoggedCompatibilityInteractionFallback;
         private GameObject _objectivesPanelObject;
 
         private void Awake()
@@ -713,6 +714,11 @@ namespace Game.UI
                 && fallbackInteractionSystem != null)
             {
                 _interactionSystem = fallbackInteractionSystem;
+                if (!_hasLoggedCompatibilityInteractionFallback)
+                {
+                    _hasLoggedCompatibilityInteractionFallback = true;
+                    Debug.LogWarning("[GameplayHUD] Using compatibility fallback to resolve InteractionSystem.", this);
+                }
             }
         }
 

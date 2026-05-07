@@ -243,6 +243,7 @@ namespace Game.Player
             }
 
             LogCompatibilityFallback("TryGetInventoryGridUI(find)");
+            LogFallbackDetailOnce("TryGetInventoryGridUI(find)", "Falling back to scene-wide InventoryGridUI lookup.");
             inventoryGridUI = Object.FindAnyObjectByType<InventoryGridUI>();
             return inventoryGridUI != null;
         }
@@ -370,6 +371,18 @@ namespace Game.Player
                 inventoryGridUI,
                 gameplayHUD);
 
+            List<string> missing = new List<string>(6);
+            if (playerController == null) missing.Add(nameof(PlayerController));
+            if (firstPersonCamera == null) missing.Add(nameof(FirstPersonCamera));
+            if (inputHandler == null) missing.Add(nameof(PlayerInputHandler));
+            if (interactionSystem == null) missing.Add(nameof(InteractionSystem));
+            if (inventoryGridUI == null) missing.Add(nameof(InventoryGridUI));
+            if (gameplayHUD == null) missing.Add(nameof(GameplayHUD));
+            string missingDetails = missing.Count > 0
+                ? $"missing={string.Join(",", missing)}"
+                : "missing=<none>";
+            LogFallbackDetailOnce("TryBuildSoloFallbackContext.missing", $"Compatibility scan detail: {missingDetails}");
+
             LogFallbackResolutionDetails(
                 "TryBuildSoloFallbackContext",
                 playerController,
@@ -413,6 +426,19 @@ namespace Game.Player
             Debug.Log(
                 $"[PlayerContextLocator] Compatibility fallback used at '{callsite}' in scene '{sceneName}' ({netMode}, {fallbackWindow}). " +
                 "Fallback remains permissive for bootstrap/recovery compatibility. TODO(MP-4): remove after explicit bootstrap/rebind.");
+#endif
+        }
+
+        private static void LogFallbackDetailOnce(string key, string message)
+        {
+#if UNITY_EDITOR || DEVELOPMENT_BUILD
+            if (string.IsNullOrWhiteSpace(key) || string.IsNullOrWhiteSpace(message) || LoggedFallbackDetails.Contains(key))
+            {
+                return;
+            }
+
+            LoggedFallbackDetails.Add(key);
+            Debug.LogWarning($"[PlayerContextLocator] {message}");
 #endif
         }
 

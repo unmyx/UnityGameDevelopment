@@ -2,6 +2,14 @@ using UnityEngine;
 
 namespace Game.Minigames
 {
+    /// <summary>
+    /// Optional difficulty preset helper for Measure/Cut tuning.
+    ///
+    /// Deferred cleanup note:
+    /// Currently unused by runtime paths (no active references found).
+    /// Kept temporarily in case profile-based Measure/Cut tuning is reintroduced.
+    /// Safe deferred removal candidate if that plan is dropped.
+    /// </summary>
     [System.Serializable]
     public struct MeasureCutDifficultyProfile
     {

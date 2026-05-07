@@ -88,6 +88,7 @@ namespace Game.Minigames
         private CursorLockMode _previousCursorLockMode;
         private bool _previousCursorVisible;
         private bool _hasLoggedMissingEventSystem;
+        private bool _hasLoggedEventSystemCompatibilityFallback;
         private bool _usesPresentationCursorAuthority;
 
         private const int UiSortingOrder = 500;
@@ -838,6 +839,11 @@ namespace Game.Minigames
             EventSystem sceneEventSystem = Object.FindAnyObjectByType<EventSystem>();
             if (sceneEventSystem != null)
             {
+                if (!_hasLoggedEventSystemCompatibilityFallback)
+                {
+                    _hasLoggedEventSystemCompatibilityFallback = true;
+                    Debug.LogWarning("[LieMinigame] Using scene-wide EventSystem fallback (EventSystem.current was null).", this);
+                }
                 return true;
             }
 

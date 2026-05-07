@@ -101,6 +101,7 @@ namespace Game.Minigames
         private Vector3 _returnTransitionStartPosition;
         private Quaternion _returnTransitionStartRotation;
         private MinigameResult _pendingResult = MinigameResult.None;
+        private bool _hasLoggedCameraFallbackWarning;
         private Coroutine _cameraTransitionRoutine;
 
         protected override void OnInitialize()
@@ -1089,16 +1090,34 @@ namespace Game.Minigames
             }
 
             if (_firstPersonCamera == null
+                && PlayerContextLocator.TryGetLocalContext(out PlayerContext localContext)
+                && localContext != null
+                && localContext.FirstPersonCamera != null)
+            {
+                _firstPersonCamera = localContext.FirstPersonCamera;
+            }
+
+            if (_firstPersonCamera == null
                 && PlayerContextLocator.IsCompatibilityFallbackAllowed()
                 && PlayerContextLocator.TryGetFirstPersonCamera(out FirstPersonCamera compatibilityFirstPersonCamera)
                 && compatibilityFirstPersonCamera != null)
             {
+                if (!_hasLoggedCameraFallbackWarning)
+                {
+                    _hasLoggedCameraFallbackWarning = true;
+                    Debug.LogWarning("[WeldingFillMinigame] Using compatibility fallback to resolve gameplay camera.", this);
+                }
                 _firstPersonCamera = compatibilityFirstPersonCamera;
             }
 
             if (_firstPersonCamera == null && PlayerContextLocator.IsCompatibilityFallbackAllowed())
             {
                 _firstPersonCamera = FindAnyObjectByType<FirstPersonCamera>();
+                if (_firstPersonCamera != null && !_hasLoggedCameraFallbackWarning)
+                {
+                    _hasLoggedCameraFallbackWarning = true;
+                    Debug.LogWarning("[WeldingFillMinigame] Using scene-wide FirstPersonCamera fallback.", this);
+                }
             }
 
             if (_firstPersonCamera != null)

@@ -20,6 +20,7 @@ namespace Game.Input
     public class InputManager : MonoBehaviour
     {
         private static InputManager _instance;
+        private static bool _hasLoggedFallbackInstanceLookup;
         public static InputManager Instance
         {
             get
@@ -27,6 +28,13 @@ namespace Game.Input
                 if (_instance == null)
                 {
                     _instance = FindAnyObjectByType<InputManager>();
+                    if (_instance != null && !_hasLoggedFallbackInstanceLookup)
+                    {
+                        _hasLoggedFallbackInstanceLookup = true;
+                        Debug.LogWarning(
+                            $"[InputManager] Fallback instance scan used in scene '{UnityEngine.SceneManagement.SceneManager.GetActiveScene().name}'. " +
+                            "Resolved via FindAnyObjectByType for bootstrap/recovery compatibility.");
+                    }
                 }
                 return _instance;
             }

@@ -3918,24 +3918,7 @@ namespace Game.Core
             {
                 return false;
             }
-
-            NetworkManager manager = NetworkManager.Singleton;
-            if (manager != null && manager.IsListening)
-            {
-                if (!manager.IsServer)
-                {
-                    return true;
-                }
-
-                if (manager.SceneManager != null && manager.NetworkConfig != null && manager.NetworkConfig.EnableSceneManagement)
-                {
-                    SceneEventProgressStatus status = manager.SceneManager.LoadScene(targetSceneName, LoadSceneMode.Single);
-                    return status == SceneEventProgressStatus.Started || status == SceneEventProgressStatus.SceneEventInProgress;
-                }
-            }
-
-            SceneManager.LoadScene(targetSceneName);
-            return true;
+            return NetworkSafeSceneRouter.TryRoute(targetSceneName, this, allowClientLocalLoad: false);
         }
 
         private void ReconcileSceneWithRunPhaseAfterRestore()

@@ -165,6 +165,7 @@ namespace Game.UI
         private float _nextAllowedDropTime;
         private bool _hasLoggedMissingHeldItemAnchor;
         private static bool _hasLoggedMissingHeldItemAnchorSession;
+        private bool _hasLoggedCompatibilityCameraFallback;
         private string _lastHeldItemAnchorBindFailureReason = string.Empty;
         private bool _awaitingNetworkDropResponse;
         private ulong _pendingNetworkDropRequestId;
@@ -1079,6 +1080,11 @@ namespace Game.UI
             if (firstPersonCamera == null && PlayerContextLocator.IsCompatibilityFallbackAllowed())
             {
                 PlayerContextLocator.TryGetFirstPersonCamera(out firstPersonCamera);
+                if (firstPersonCamera != null && !_hasLoggedCompatibilityCameraFallback)
+                {
+                    _hasLoggedCompatibilityCameraFallback = true;
+                    Debug.LogWarning("[InventoryGridUI] Using compatibility fallback to resolve FirstPersonCamera for held-item anchor.", this);
+                }
             }
 
             if (firstPersonCamera == null)
@@ -1131,6 +1137,11 @@ namespace Game.UI
             if (firstPersonCamera == null && PlayerContextLocator.IsCompatibilityFallbackAllowed())
             {
                 PlayerContextLocator.TryGetFirstPersonCamera(out firstPersonCamera);
+                if (firstPersonCamera != null && !_hasLoggedCompatibilityCameraFallback)
+                {
+                    _hasLoggedCompatibilityCameraFallback = true;
+                    Debug.LogWarning("[InventoryGridUI] Using compatibility fallback to resolve local camera transform.", this);
+                }
             }
 
             return firstPersonCamera != null ? firstPersonCamera.transform : null;

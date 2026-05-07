@@ -80,6 +80,7 @@ namespace Game.Minigames
 
         private PlayerController _playerController;
         private bool _playerControllerWasEnabled;
+        private bool _hasLoggedPlayerControllerFallbackWarning;
 
         protected override void OnInitialize()
         {
@@ -654,7 +655,22 @@ namespace Game.Minigames
             {
                 if (_playerController == null)
                 {
+                    if (PlayerContextLocator.TryGetLocalContext(out PlayerContext localContext)
+                        && localContext != null
+                        && localContext.PlayerController != null)
+                    {
+                        _playerController = localContext.PlayerController;
+                    }
+                }
+
+                if (_playerController == null)
+                {
                     _playerController = FindAnyObjectByType<PlayerController>();
+                    if (_playerController != null && !_hasLoggedPlayerControllerFallbackWarning)
+                    {
+                        _hasLoggedPlayerControllerFallbackWarning = true;
+                        Debug.LogWarning("[PipePaintMinigame] Using scene-wide PlayerController fallback for movement freeze.", this);
+                    }
                 }
 
                 if (_playerController != null)

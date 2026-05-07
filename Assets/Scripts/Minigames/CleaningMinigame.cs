@@ -97,6 +97,8 @@ namespace Game.Minigames
 
         private PlayerController _playerController;
         private bool _playerControllerWasEnabled;
+        private bool _hasLoggedCameraFallbackWarning;
+        private bool _hasLoggedPlayerControllerFallbackWarning;
 
         private TextMeshProUGUI _timerText;
         private TextMeshProUGUI _progressText;
@@ -1236,11 +1238,27 @@ namespace Game.Minigames
                 }
             }
 
+            if (PlayerContextLocator.TryGetLocalContext(out PlayerContext localContext)
+                && localContext != null
+                && localContext.FirstPersonCamera != null)
+            {
+                _gameplayViewCamera = localContext.FirstPersonCamera.GetComponent<Camera>();
+                if (_gameplayViewCamera != null)
+                {
+                    return _gameplayViewCamera;
+                }
+            }
+
             FirstPersonCamera firstPersonCamera = null;
             if (PlayerContextLocator.IsCompatibilityFallbackAllowed()
                 && PlayerContextLocator.TryGetFirstPersonCamera(out firstPersonCamera)
                 && firstPersonCamera != null)
             {
+                if (!_hasLoggedCameraFallbackWarning)
+                {
+                    _hasLoggedCameraFallbackWarning = true;
+                    Debug.LogWarning("[CleaningMinigame] Using compatibility fallback to resolve gameplay camera.", this);
+                }
                 _gameplayViewCamera = firstPersonCamera.GetComponent<Camera>();
                 if (_gameplayViewCamera != null)
                 {
@@ -1251,6 +1269,11 @@ namespace Game.Minigames
             if (PlayerContextLocator.IsCompatibilityFallbackAllowed())
             {
                 firstPersonCamera = FindAnyObjectByType<FirstPersonCamera>();
+                if (firstPersonCamera != null && !_hasLoggedCameraFallbackWarning)
+                {
+                    _hasLoggedCameraFallbackWarning = true;
+                    Debug.LogWarning("[CleaningMinigame] Using scene-wide FirstPersonCamera fallback.", this);
+                }
             }
 
             if (firstPersonCamera != null)
@@ -1427,7 +1450,22 @@ namespace Game.Minigames
             {
                 if (_playerController == null)
                 {
+                    if (PlayerContextLocator.TryGetLocalContext(out PlayerContext localContext)
+                        && localContext != null
+                        && localContext.PlayerController != null)
+                    {
+                        _playerController = localContext.PlayerController;
+                    }
+                }
+
+                if (_playerController == null)
+                {
                     _playerController = FindAnyObjectByType<PlayerController>();
+                    if (_playerController != null && !_hasLoggedPlayerControllerFallbackWarning)
+                    {
+                        _hasLoggedPlayerControllerFallbackWarning = true;
+                        Debug.LogWarning("[CleaningMinigame] Using scene-wide PlayerController fallback for movement freeze.", this);
+                    }
                 }
 
                 if (_playerController != null)

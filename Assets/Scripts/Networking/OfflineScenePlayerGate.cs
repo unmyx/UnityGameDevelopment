@@ -8,6 +8,12 @@ namespace Game.Networking
     /// <summary>
     /// Suppresses offline scene Player roots when an NGO session is active.
     /// Keeps offline solo scene Player objects untouched.
+    ///
+    /// NOTE:
+    /// This component is intentionally unwired in scene/prefab YAML.
+    /// It is reached via RuntimeInitializeOnLoadMethod bootstrap hooks and
+    /// suppresses offline player roots during active NGO sessions.
+    /// Do not remove solely because no scene/prefab references are present.
     /// </summary>
     [DisallowMultipleComponent]
     public class OfflineScenePlayerGate : MonoBehaviour

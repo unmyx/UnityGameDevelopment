@@ -54,6 +54,7 @@ namespace Game.Interaction
         private bool _isSubscribedToInteract;
         private bool _interactRequested;
         private int _interactRequestedFrame = -1;
+        private bool _hasLoggedParentCameraFallback;
 
         private void OnEnable()
         {
@@ -403,6 +404,14 @@ namespace Game.Interaction
             }
 
             if (_raycastCamera == null
+                && PlayerContextLocator.TryGetLocalContext(out PlayerContext localContext)
+                && localContext != null
+                && localContext.FirstPersonCamera != null)
+            {
+                _raycastCamera = localContext.FirstPersonCamera.GetComponent<Camera>();
+            }
+
+            if (_raycastCamera == null
                 && PlayerContextLocator.IsCompatibilityFallbackAllowed()
                 && PlayerContextLocator.TryGetFirstPersonCamera(out firstPersonCamera)
                 && firstPersonCamera != null)
@@ -413,6 +422,14 @@ namespace Game.Interaction
             if (_raycastCamera == null)
             {
                 _raycastCamera = GetComponentInParent<Camera>();
+                if (_raycastCamera != null && !_hasLoggedParentCameraFallback)
+                {
+                    _hasLoggedParentCameraFallback = true;
+                    Debug.LogWarning(
+                        "[InteractionSystem] Using parent Camera fallback for raycast camera. " +
+                        "Prefer deterministic local PlayerContext camera binding.",
+                        this);
+                }
             }
 
             // TODO(MP-4): Remove compatibility fallback once per-player camera bootstrap/rebind is explicit in scene setup.
