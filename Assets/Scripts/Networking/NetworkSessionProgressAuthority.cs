@@ -28,6 +28,9 @@ namespace Game.Networking
             public string reason;
             public int cleaningSessionToken;
             public int weldingSessionToken;
+            public int measureCutSessionToken;
+            public int pipePaintSessionToken;
+            public int drillScrewSessionToken;
             public string canonicalTaskKey;
         }
 
@@ -94,6 +97,36 @@ namespace Game.Networking
             public MinigameResult result;
         }
 
+        public struct MeasureCutResultResolutionResponse
+        {
+            public int sessionToken;
+            public string taskKey;
+            public bool accepted;
+            public string reason;
+            public MinigameResult result;
+            public float qualityScore;
+        }
+
+        public struct PipePaintResultResolutionResponse
+        {
+            public int sessionToken;
+            public string taskKey;
+            public bool accepted;
+            public string reason;
+            public MinigameResult result;
+            public float coverageScore;
+        }
+
+        public struct DrillScrewResultResolutionResponse
+        {
+            public int sessionToken;
+            public string taskKey;
+            public bool accepted;
+            public string reason;
+            public MinigameResult result;
+            public float qualityScore;
+        }
+
         public struct ComputerSessionStartResponse
         {
             public string stationKey;
@@ -111,6 +144,9 @@ namespace Game.Networking
         public static event Action<NpcLieResolutionResponse> OnNpcLieResolutionResponse;
         public static event Action<CleaningResultResolutionResponse> OnCleaningResultResolutionResponse;
         public static event Action<WeldingResultResolutionResponse> OnWeldingResultResolutionResponse;
+        public static event Action<MeasureCutResultResolutionResponse> OnMeasureCutResultResolutionResponse;
+        public static event Action<PipePaintResultResolutionResponse> OnPipePaintResultResolutionResponse;
+        public static event Action<DrillScrewResultResolutionResponse> OnDrillScrewResultResolutionResponse;
         public static event Action<ComputerSessionStartResponse> OnComputerSessionStartResponse;
         public static event Action<string> OnOwnerStolenLootSnapshotApplied;
 
@@ -172,6 +208,18 @@ namespace Game.Networking
             new Dictionary<string, WeldingSessionRuntime>(StringComparer.Ordinal);
         private readonly Dictionary<int, WeldingSessionRuntime> _weldingSessionsByToken =
             new Dictionary<int, WeldingSessionRuntime>();
+        private readonly Dictionary<string, MeasureCutSessionRuntime> _activeMeasureCutSessionsByTaskKey =
+            new Dictionary<string, MeasureCutSessionRuntime>(StringComparer.Ordinal);
+        private readonly Dictionary<int, MeasureCutSessionRuntime> _measureCutSessionsByToken =
+            new Dictionary<int, MeasureCutSessionRuntime>();
+        private readonly Dictionary<string, PipePaintSessionRuntime> _activePipePaintSessionsByTaskKey =
+            new Dictionary<string, PipePaintSessionRuntime>(StringComparer.Ordinal);
+        private readonly Dictionary<int, PipePaintSessionRuntime> _pipePaintSessionsByToken =
+            new Dictionary<int, PipePaintSessionRuntime>();
+        private readonly Dictionary<string, DrillScrewSessionRuntime> _activeDrillScrewSessionsByTaskKey =
+            new Dictionary<string, DrillScrewSessionRuntime>(StringComparer.Ordinal);
+        private readonly Dictionary<int, DrillScrewSessionRuntime> _drillScrewSessionsByToken =
+            new Dictionary<int, DrillScrewSessionRuntime>();
         private readonly Dictionary<string, ComputerSessionRuntime> _activeComputerSessionsByStationKey =
             new Dictionary<string, ComputerSessionRuntime>(StringComparer.Ordinal);
         private readonly Dictionary<int, ComputerSessionRuntime> _computerSessionsByToken =
@@ -179,6 +227,9 @@ namespace Game.Networking
         private static readonly HashSet<string> ConsumedNpcCatchKeys = new HashSet<string>();
         private int _cleaningSessionSequence;
         private int _weldingSessionSequence;
+        private int _measureCutSessionSequence;
+        private int _pipePaintSessionSequence;
+        private int _drillScrewSessionSequence;
         private int _computerSessionSequence;
 
         private bool _hasActiveLocalLieCatch;
@@ -225,6 +276,66 @@ namespace Game.Networking
             public float resolvedAt;
         }
 
+        private enum MeasureCutSessionStatus
+        {
+            Pending = 0,
+            Resolved = 1,
+            Aborted = 2
+        }
+
+        private sealed class MeasureCutSessionRuntime
+        {
+            public int sessionToken;
+            public string taskKey;
+            public string ownerKey;
+            public ulong ownerClientId;
+            public float startedAt;
+            public MeasureCutSessionStatus status;
+            public MinigameResult resolvedResult;
+            public float resolvedAt;
+            public float resolvedQualityScore;
+        }
+
+        private enum PipePaintSessionStatus
+        {
+            Pending = 0,
+            Resolved = 1,
+            Aborted = 2
+        }
+
+        private sealed class PipePaintSessionRuntime
+        {
+            public int sessionToken;
+            public string taskKey;
+            public string ownerKey;
+            public ulong ownerClientId;
+            public float startedAt;
+            public PipePaintSessionStatus status;
+            public MinigameResult resolvedResult;
+            public float resolvedAt;
+            public float resolvedCoverageScore;
+        }
+
+        private enum DrillScrewSessionStatus
+        {
+            Pending = 0,
+            Resolved = 1,
+            Aborted = 2
+        }
+
+        private sealed class DrillScrewSessionRuntime
+        {
+            public int sessionToken;
+            public string taskKey;
+            public string ownerKey;
+            public ulong ownerClientId;
+            public float startedAt;
+            public DrillScrewSessionStatus status;
+            public MinigameResult resolvedResult;
+            public float resolvedAt;
+            public float resolvedQualityScore;
+        }
+
         private enum ComputerSessionStatus
         {
             Pending = 0,
@@ -249,6 +360,15 @@ namespace Game.Networking
         private const string WeldingTaskType = "welding";
         private const string WeldingMinigameId = "welding";
         private const int WeldingSessionRewardDedupeScope = 22022;
+        private const string MeasureCutTaskType = "measure_cut";
+        private const string MeasureCutMinigameId = "measure_cut";
+        private const int MeasureCutSessionRewardDedupeScope = 23023;
+        private const string PipePaintTaskType = "pipe_paint";
+        private const string PipePaintMinigameId = "pipe_paint";
+        private const int PipePaintSessionRewardDedupeScope = 24024;
+        private const string DrillScrewTaskType = "drill_screw";
+        private const string DrillScrewMinigameId = "drill_screw";
+        private const int DrillScrewSessionRewardDedupeScope = 25025;
         private const string ComputerMinigameId = "computer";
 
         public static bool TryGetLocalRequester(out NetworkSessionProgressAuthority authority)
@@ -347,6 +467,12 @@ namespace Game.Networking
             _cleaningSessionsByToken.Clear();
             _activeWeldingSessionsByTaskKey.Clear();
             _weldingSessionsByToken.Clear();
+            _activeMeasureCutSessionsByTaskKey.Clear();
+            _measureCutSessionsByToken.Clear();
+            _activePipePaintSessionsByTaskKey.Clear();
+            _pipePaintSessionsByToken.Clear();
+            _activeDrillScrewSessionsByTaskKey.Clear();
+            _drillScrewSessionsByToken.Clear();
             _activeComputerSessionsByStationKey.Clear();
             _computerSessionsByToken.Clear();
             ClearLocalLieCatchSession();
@@ -384,6 +510,9 @@ namespace Game.Networking
 
             CleanupStaleCleaningSessions();
             CleanupStaleWeldingSessions();
+            CleanupStaleMeasureCutSessions();
+            CleanupStalePipePaintSessions();
+            CleanupStaleDrillScrewSessions();
             CleanupStaleComputerSessions();
 
             if (Time.unscaledTime < _nextSyncTime)
@@ -751,6 +880,108 @@ namespace Game.Networking
             RequestResolveWeldingResultServerRpc(sessionToken, normalizedTaskKey, (int)result);
         }
 
+        public void RequestResolveMeasureCutResult(int sessionToken, string taskKey, MinigameResult result, float qualityScore)
+        {
+            if (!IsSpawned || sessionToken <= 0)
+            {
+                return;
+            }
+
+            string normalizedTaskKey = NormalizeTaskKeyForSession(taskKey);
+            if (string.IsNullOrEmpty(normalizedTaskKey))
+            {
+                return;
+            }
+
+            if (IsServer)
+            {
+                if (TryGetAuthoritativePublisher(out NetworkSessionProgressAuthority authoritativePublisher)
+                    && !ReferenceEquals(authoritativePublisher, this))
+                {
+                    authoritativePublisher.ExecuteResolveMeasureCutResult(
+                        OwnerClientId,
+                        sessionToken,
+                        normalizedTaskKey,
+                        (int)result,
+                        qualityScore);
+                    return;
+                }
+
+                ExecuteResolveMeasureCutResult(OwnerClientId, sessionToken, normalizedTaskKey, (int)result, qualityScore);
+                return;
+            }
+
+            RequestResolveMeasureCutResultServerRpc(sessionToken, normalizedTaskKey, (int)result, qualityScore);
+        }
+
+        public void RequestResolvePipePaintResult(int sessionToken, string taskKey, MinigameResult result, float coverageScore)
+        {
+            if (!IsSpawned || sessionToken <= 0)
+            {
+                return;
+            }
+
+            string normalizedTaskKey = NormalizeTaskKeyForSession(taskKey);
+            if (string.IsNullOrEmpty(normalizedTaskKey))
+            {
+                return;
+            }
+
+            if (IsServer)
+            {
+                if (TryGetAuthoritativePublisher(out NetworkSessionProgressAuthority authoritativePublisher)
+                    && !ReferenceEquals(authoritativePublisher, this))
+                {
+                    authoritativePublisher.ExecuteResolvePipePaintResult(
+                        OwnerClientId,
+                        sessionToken,
+                        normalizedTaskKey,
+                        (int)result,
+                        coverageScore);
+                    return;
+                }
+
+                ExecuteResolvePipePaintResult(OwnerClientId, sessionToken, normalizedTaskKey, (int)result, coverageScore);
+                return;
+            }
+
+            RequestResolvePipePaintResultServerRpc(sessionToken, normalizedTaskKey, (int)result, coverageScore);
+        }
+
+        public void RequestResolveDrillScrewResult(int sessionToken, string taskKey, MinigameResult result, float qualityScore)
+        {
+            if (!IsSpawned || sessionToken <= 0)
+            {
+                return;
+            }
+
+            string normalizedTaskKey = NormalizeTaskKeyForSession(taskKey);
+            if (string.IsNullOrEmpty(normalizedTaskKey))
+            {
+                return;
+            }
+
+            if (IsServer)
+            {
+                if (TryGetAuthoritativePublisher(out NetworkSessionProgressAuthority authoritativePublisher)
+                    && !ReferenceEquals(authoritativePublisher, this))
+                {
+                    authoritativePublisher.ExecuteResolveDrillScrewResult(
+                        OwnerClientId,
+                        sessionToken,
+                        normalizedTaskKey,
+                        (int)result,
+                        qualityScore);
+                    return;
+                }
+
+                ExecuteResolveDrillScrewResult(OwnerClientId, sessionToken, normalizedTaskKey, (int)result, qualityScore);
+                return;
+            }
+
+            RequestResolveDrillScrewResultServerRpc(sessionToken, normalizedTaskKey, (int)result, qualityScore);
+        }
+
         public void RequestRegisterDailyTaskLaunchContext(string taskType, string taskKey)
         {
             if (!IsSpawned)
@@ -1054,6 +1285,90 @@ namespace Game.Networking
                 sessionToken,
                 taskKey,
                 resultValue);
+        }
+
+        [ServerRpc(RequireOwnership = false)]
+        private void RequestResolveMeasureCutResultServerRpc(
+            int sessionToken,
+            string taskKey,
+            int resultValue,
+            float qualityScore,
+            ServerRpcParams serverRpcParams = default)
+        {
+            if (TryGetAuthoritativePublisher(out NetworkSessionProgressAuthority authoritativePublisher)
+                && !ReferenceEquals(authoritativePublisher, this))
+            {
+                authoritativePublisher.ExecuteResolveMeasureCutResult(
+                    serverRpcParams.Receive.SenderClientId,
+                    sessionToken,
+                    taskKey,
+                    resultValue,
+                    qualityScore);
+                return;
+            }
+
+            ExecuteResolveMeasureCutResult(
+                serverRpcParams.Receive.SenderClientId,
+                sessionToken,
+                taskKey,
+                resultValue,
+                qualityScore);
+        }
+
+        [ServerRpc(RequireOwnership = false)]
+        private void RequestResolvePipePaintResultServerRpc(
+            int sessionToken,
+            string taskKey,
+            int resultValue,
+            float coverageScore,
+            ServerRpcParams serverRpcParams = default)
+        {
+            if (TryGetAuthoritativePublisher(out NetworkSessionProgressAuthority authoritativePublisher)
+                && !ReferenceEquals(authoritativePublisher, this))
+            {
+                authoritativePublisher.ExecuteResolvePipePaintResult(
+                    serverRpcParams.Receive.SenderClientId,
+                    sessionToken,
+                    taskKey,
+                    resultValue,
+                    coverageScore);
+                return;
+            }
+
+            ExecuteResolvePipePaintResult(
+                serverRpcParams.Receive.SenderClientId,
+                sessionToken,
+                taskKey,
+                resultValue,
+                coverageScore);
+        }
+
+        [ServerRpc(RequireOwnership = false)]
+        private void RequestResolveDrillScrewResultServerRpc(
+            int sessionToken,
+            string taskKey,
+            int resultValue,
+            float qualityScore,
+            ServerRpcParams serverRpcParams = default)
+        {
+            if (TryGetAuthoritativePublisher(out NetworkSessionProgressAuthority authoritativePublisher)
+                && !ReferenceEquals(authoritativePublisher, this))
+            {
+                authoritativePublisher.ExecuteResolveDrillScrewResult(
+                    serverRpcParams.Receive.SenderClientId,
+                    sessionToken,
+                    taskKey,
+                    resultValue,
+                    qualityScore);
+                return;
+            }
+
+            ExecuteResolveDrillScrewResult(
+                serverRpcParams.Receive.SenderClientId,
+                sessionToken,
+                taskKey,
+                resultValue,
+                qualityScore);
         }
 
         private static bool TryGetAuthoritativePublisher(out NetworkSessionProgressAuthority authority)
@@ -1603,6 +1918,9 @@ namespace Game.Networking
                     "Progression is unavailable.",
                     0,
                     0,
+                    0,
+                    0,
+                    0,
                     string.Empty,
                     BuildTargetClientRpcParams(senderClientId));
                 return;
@@ -1629,6 +1947,9 @@ namespace Game.Networking
                     "Requester is unavailable.",
                     0,
                     0,
+                    0,
+                    0,
+                    0,
                     string.Empty,
                     BuildTargetClientRpcParams(senderClientId));
                 return;
@@ -1649,6 +1970,9 @@ namespace Game.Networking
                     string.IsNullOrWhiteSpace(blockedReason) ? "Task is unavailable." : blockedReason,
                     0,
                     0,
+                    0,
+                    0,
+                    0,
                     string.Empty,
                     BuildTargetClientRpcParams(senderClientId));
                 return;
@@ -1658,6 +1982,9 @@ namespace Game.Networking
             string normalizedTaskKey = NormalizeTaskKeyForSession(taskKey);
             int cleaningSessionToken = 0;
             int weldingSessionToken = 0;
+            int measureCutSessionToken = 0;
+            int pipePaintSessionToken = 0;
+            int drillScrewSessionToken = 0;
             string canonicalTaskKey = normalizedTaskKey;
             if (string.Equals(normalizedTaskType, CleaningTaskType, StringComparison.Ordinal))
             {
@@ -1669,6 +1996,9 @@ namespace Game.Networking
                         minigameId ?? string.Empty,
                         false,
                         string.IsNullOrWhiteSpace(lockRejectReason) ? "Station is currently occupied." : lockRejectReason,
+                        0,
+                        0,
+                        0,
                         0,
                         0,
                         normalizedTaskKey,
@@ -1691,6 +2021,9 @@ namespace Game.Networking
                         string.IsNullOrWhiteSpace(lockRejectReason) ? "Station is currently occupied." : lockRejectReason,
                         0,
                         0,
+                        0,
+                        0,
+                        0,
                         normalizedTaskKey,
                         BuildTargetClientRpcParams(senderClientId));
                     return;
@@ -1698,6 +2031,75 @@ namespace Game.Networking
 
                 weldingSessionToken = weldingSession.sessionToken;
                 canonicalTaskKey = weldingSession.taskKey;
+            }
+            else if (string.Equals(normalizedTaskType, MeasureCutTaskType, StringComparison.Ordinal))
+            {
+                if (!TryStartMeasureCutSession(senderClientId, normalizedTaskKey, out MeasureCutSessionRuntime measureCutSession, out string lockRejectReason))
+                {
+                    SendJobInteractableStartResponseClientRpc(
+                        taskType ?? string.Empty,
+                        taskKey ?? string.Empty,
+                        minigameId ?? string.Empty,
+                        false,
+                        string.IsNullOrWhiteSpace(lockRejectReason) ? "Station is currently occupied." : lockRejectReason,
+                        0,
+                        0,
+                        0,
+                        0,
+                        0,
+                        normalizedTaskKey,
+                        BuildTargetClientRpcParams(senderClientId));
+                    return;
+                }
+
+                measureCutSessionToken = measureCutSession.sessionToken;
+                canonicalTaskKey = measureCutSession.taskKey;
+            }
+            else if (string.Equals(normalizedTaskType, PipePaintTaskType, StringComparison.Ordinal))
+            {
+                if (!TryStartPipePaintSession(senderClientId, normalizedTaskKey, out PipePaintSessionRuntime pipePaintSession, out string lockRejectReason))
+                {
+                    SendJobInteractableStartResponseClientRpc(
+                        taskType ?? string.Empty,
+                        taskKey ?? string.Empty,
+                        minigameId ?? string.Empty,
+                        false,
+                        string.IsNullOrWhiteSpace(lockRejectReason) ? "Station is currently occupied." : lockRejectReason,
+                        0,
+                        0,
+                        0,
+                        0,
+                        0,
+                        normalizedTaskKey,
+                        BuildTargetClientRpcParams(senderClientId));
+                    return;
+                }
+
+                pipePaintSessionToken = pipePaintSession.sessionToken;
+                canonicalTaskKey = pipePaintSession.taskKey;
+            }
+            else if (string.Equals(normalizedTaskType, DrillScrewTaskType, StringComparison.Ordinal))
+            {
+                if (!TryStartDrillScrewSession(senderClientId, normalizedTaskKey, out DrillScrewSessionRuntime drillScrewSession, out string lockRejectReason))
+                {
+                    SendJobInteractableStartResponseClientRpc(
+                        taskType ?? string.Empty,
+                        taskKey ?? string.Empty,
+                        minigameId ?? string.Empty,
+                        false,
+                        string.IsNullOrWhiteSpace(lockRejectReason) ? "Station is currently occupied." : lockRejectReason,
+                        0,
+                        0,
+                        0,
+                        0,
+                        0,
+                        normalizedTaskKey,
+                        BuildTargetClientRpcParams(senderClientId));
+                    return;
+                }
+
+                drillScrewSessionToken = drillScrewSession.sessionToken;
+                canonicalTaskKey = drillScrewSession.taskKey;
             }
 
             gameManager.RegisterDailyTaskLaunchContext(normalizedTaskType, normalizedTaskKey);
@@ -1716,6 +2118,9 @@ namespace Game.Networking
                 string.Empty,
                 cleaningSessionToken,
                 weldingSessionToken,
+                measureCutSessionToken,
+                pipePaintSessionToken,
+                drillScrewSessionToken,
                 canonicalTaskKey,
                 BuildTargetClientRpcParams(senderClientId));
         }
@@ -1934,6 +2339,346 @@ namespace Game.Networking
                 BuildTargetClientRpcParams(senderClientId));
         }
 
+        private void ExecuteResolveMeasureCutResult(
+            ulong senderClientId,
+            int sessionToken,
+            string taskKey,
+            int resultValue,
+            float qualityScore)
+        {
+            if (!IsServer || !IsSpawned)
+            {
+                return;
+            }
+
+            string normalizedTaskKey = NormalizeTaskKeyForSession(taskKey);
+            MinigameResult parsedResult = Enum.IsDefined(typeof(MinigameResult), resultValue)
+                ? (MinigameResult)resultValue
+                : MinigameResult.None;
+            float sanitizedQualityScore = Mathf.Clamp(qualityScore, 0f, 100f);
+            if (sessionToken <= 0 || string.IsNullOrEmpty(normalizedTaskKey) || parsedResult == MinigameResult.None)
+            {
+                SendMeasureCutResultResolutionResponseClientRpc(
+                    sessionToken,
+                    normalizedTaskKey,
+                    false,
+                    "Invalid measure/cut result payload.",
+                    (int)parsedResult,
+                    sanitizedQualityScore,
+                    BuildTargetClientRpcParams(senderClientId));
+                return;
+            }
+
+            if (!_measureCutSessionsByToken.TryGetValue(sessionToken, out MeasureCutSessionRuntime session) || session == null)
+            {
+                SendMeasureCutResultResolutionResponseClientRpc(
+                    sessionToken,
+                    normalizedTaskKey,
+                    false,
+                    "Measure/cut session not found.",
+                    (int)parsedResult,
+                    sanitizedQualityScore,
+                    BuildTargetClientRpcParams(senderClientId));
+                return;
+            }
+
+            if (!string.Equals(session.taskKey, normalizedTaskKey, StringComparison.Ordinal))
+            {
+                SendMeasureCutResultResolutionResponseClientRpc(
+                    sessionToken,
+                    normalizedTaskKey,
+                    false,
+                    "Measure/cut task key mismatch.",
+                    (int)parsedResult,
+                    sanitizedQualityScore,
+                    BuildTargetClientRpcParams(senderClientId));
+                return;
+            }
+
+            if (session.status != MeasureCutSessionStatus.Pending)
+            {
+                SendMeasureCutResultResolutionResponseClientRpc(
+                    sessionToken,
+                    normalizedTaskKey,
+                    false,
+                    "Measure/cut session already resolved.",
+                    (int)parsedResult,
+                    sanitizedQualityScore,
+                    BuildTargetClientRpcParams(senderClientId));
+                return;
+            }
+
+            string authoritativeOwnerKey = ResolveOwnerPlayerIdFromSender(senderClientId);
+            if (!string.Equals(session.ownerKey, authoritativeOwnerKey, StringComparison.Ordinal)
+                || session.ownerClientId != senderClientId)
+            {
+                SendMeasureCutResultResolutionResponseClientRpc(
+                    sessionToken,
+                    normalizedTaskKey,
+                    false,
+                    "Sender does not own this measure/cut session.",
+                    (int)parsedResult,
+                    sanitizedQualityScore,
+                    BuildTargetClientRpcParams(senderClientId));
+                return;
+            }
+
+            session.status = MeasureCutSessionStatus.Resolved;
+            session.resolvedResult = parsedResult;
+            session.resolvedAt = Time.unscaledTime;
+            session.resolvedQualityScore = sanitizedQualityScore;
+            _activeMeasureCutSessionsByTaskKey.Remove(session.taskKey);
+
+            if (parsedResult == MinigameResult.Pass)
+            {
+                GameManager gameManager = GameManager.Instance;
+                if (gameManager != null)
+                {
+                    gameManager.RegisterDailyTaskLaunchContext(MeasureCutTaskType, session.taskKey);
+                }
+
+                MinigameRewardSystem.DistributeNetworkMeasureCutSessionReward(
+                    parsedResult,
+                    authoritativeOwnerKey,
+                    sessionToken,
+                    MeasureCutSessionRewardDedupeScope,
+                    sanitizedQualityScore);
+                SyncFromGameManager(forceTaskSnapshot: true);
+            }
+
+            SendMeasureCutResultResolutionResponseClientRpc(
+                sessionToken,
+                session.taskKey,
+                true,
+                string.Empty,
+                (int)parsedResult,
+                sanitizedQualityScore,
+                BuildTargetClientRpcParams(senderClientId));
+        }
+
+        private void ExecuteResolvePipePaintResult(
+            ulong senderClientId,
+            int sessionToken,
+            string taskKey,
+            int resultValue,
+            float coverageScore)
+        {
+            if (!IsServer || !IsSpawned)
+            {
+                return;
+            }
+
+            string normalizedTaskKey = NormalizeTaskKeyForSession(taskKey);
+            MinigameResult parsedResult = Enum.IsDefined(typeof(MinigameResult), resultValue)
+                ? (MinigameResult)resultValue
+                : MinigameResult.None;
+            float sanitizedCoverageScore = Mathf.Clamp(coverageScore, 0f, 100f);
+            if (sessionToken <= 0 || string.IsNullOrEmpty(normalizedTaskKey) || parsedResult == MinigameResult.None)
+            {
+                SendPipePaintResultResolutionResponseClientRpc(
+                    sessionToken,
+                    normalizedTaskKey,
+                    false,
+                    "Invalid pipe paint result payload.",
+                    (int)parsedResult,
+                    sanitizedCoverageScore,
+                    BuildTargetClientRpcParams(senderClientId));
+                return;
+            }
+
+            if (!_pipePaintSessionsByToken.TryGetValue(sessionToken, out PipePaintSessionRuntime session) || session == null)
+            {
+                SendPipePaintResultResolutionResponseClientRpc(
+                    sessionToken,
+                    normalizedTaskKey,
+                    false,
+                    "Pipe paint session not found.",
+                    (int)parsedResult,
+                    sanitizedCoverageScore,
+                    BuildTargetClientRpcParams(senderClientId));
+                return;
+            }
+
+            if (!string.Equals(session.taskKey, normalizedTaskKey, StringComparison.Ordinal))
+            {
+                SendPipePaintResultResolutionResponseClientRpc(
+                    sessionToken,
+                    normalizedTaskKey,
+                    false,
+                    "Pipe paint task key mismatch.",
+                    (int)parsedResult,
+                    sanitizedCoverageScore,
+                    BuildTargetClientRpcParams(senderClientId));
+                return;
+            }
+
+            if (session.status != PipePaintSessionStatus.Pending)
+            {
+                SendPipePaintResultResolutionResponseClientRpc(
+                    sessionToken,
+                    normalizedTaskKey,
+                    false,
+                    "Pipe paint session already resolved.",
+                    (int)parsedResult,
+                    sanitizedCoverageScore,
+                    BuildTargetClientRpcParams(senderClientId));
+                return;
+            }
+
+            string authoritativeOwnerKey = ResolveOwnerPlayerIdFromSender(senderClientId);
+            if (!string.Equals(session.ownerKey, authoritativeOwnerKey, StringComparison.Ordinal)
+                || session.ownerClientId != senderClientId)
+            {
+                SendPipePaintResultResolutionResponseClientRpc(
+                    sessionToken,
+                    normalizedTaskKey,
+                    false,
+                    "Sender does not own this pipe paint session.",
+                    (int)parsedResult,
+                    sanitizedCoverageScore,
+                    BuildTargetClientRpcParams(senderClientId));
+                return;
+            }
+
+            session.status = PipePaintSessionStatus.Resolved;
+            session.resolvedResult = parsedResult;
+            session.resolvedAt = Time.unscaledTime;
+            session.resolvedCoverageScore = sanitizedCoverageScore;
+            _activePipePaintSessionsByTaskKey.Remove(session.taskKey);
+
+            if (parsedResult == MinigameResult.Pass)
+            {
+                GameManager gameManager = GameManager.Instance;
+                if (gameManager != null)
+                {
+                    gameManager.RegisterDailyTaskLaunchContext(PipePaintTaskType, session.taskKey);
+                }
+
+                MinigameRewardSystem.DistributeNetworkPipePaintSessionReward(
+                    parsedResult,
+                    authoritativeOwnerKey,
+                    sessionToken,
+                    PipePaintSessionRewardDedupeScope,
+                    sanitizedCoverageScore);
+                SyncFromGameManager(forceTaskSnapshot: true);
+            }
+
+            SendPipePaintResultResolutionResponseClientRpc(
+                sessionToken,
+                session.taskKey,
+                true,
+                string.Empty,
+                (int)parsedResult,
+                sanitizedCoverageScore,
+                BuildTargetClientRpcParams(senderClientId));
+        }
+
+        private void ExecuteResolveDrillScrewResult(
+            ulong senderClientId,
+            int sessionToken,
+            string taskKey,
+            int resultValue,
+            float qualityScore)
+        {
+            if (!IsServer || !IsSpawned)
+            {
+                return;
+            }
+
+            string normalizedTaskKey = NormalizeTaskKeyForSession(taskKey);
+            MinigameResult parsedResult = Enum.IsDefined(typeof(MinigameResult), resultValue)
+                ? (MinigameResult)resultValue
+                : MinigameResult.None;
+            float sanitizedQualityScore = Mathf.Clamp(qualityScore, 0f, 100f);
+            if (sessionToken <= 0 || string.IsNullOrEmpty(normalizedTaskKey) || parsedResult == MinigameResult.None)
+            {
+                SendDrillScrewResultResolutionResponseClientRpc(
+                    sessionToken,
+                    normalizedTaskKey,
+                    false,
+                    "Invalid drill/screw result payload.",
+                    (int)parsedResult,
+                    sanitizedQualityScore,
+                    BuildTargetClientRpcParams(senderClientId));
+                return;
+            }
+
+            if (!_drillScrewSessionsByToken.TryGetValue(sessionToken, out DrillScrewSessionRuntime session) || session == null)
+            {
+                SendDrillScrewResultResolutionResponseClientRpc(
+                    sessionToken,
+                    normalizedTaskKey,
+                    false,
+                    "Drill/screw session not found.",
+                    (int)parsedResult,
+                    sanitizedQualityScore,
+                    BuildTargetClientRpcParams(senderClientId));
+                return;
+            }
+
+            string authoritativeOwnerKey = ResolveOwnerPlayerIdFromSender(senderClientId);
+            if (session.ownerClientId != senderClientId
+                || !string.Equals(session.ownerKey, authoritativeOwnerKey, StringComparison.Ordinal)
+                || !string.Equals(session.taskKey, normalizedTaskKey, StringComparison.Ordinal))
+            {
+                SendDrillScrewResultResolutionResponseClientRpc(
+                    sessionToken,
+                    session.taskKey,
+                    false,
+                    "Drill/screw session ownership mismatch.",
+                    (int)parsedResult,
+                    sanitizedQualityScore,
+                    BuildTargetClientRpcParams(senderClientId));
+                return;
+            }
+
+            if (session.status != DrillScrewSessionStatus.Pending)
+            {
+                SendDrillScrewResultResolutionResponseClientRpc(
+                    sessionToken,
+                    session.taskKey,
+                    false,
+                    "Drill/screw session already resolved.",
+                    (int)parsedResult,
+                    sanitizedQualityScore,
+                    BuildTargetClientRpcParams(senderClientId));
+                return;
+            }
+
+            session.status = parsedResult == MinigameResult.Cancelled ? DrillScrewSessionStatus.Aborted : DrillScrewSessionStatus.Resolved;
+            session.resolvedResult = parsedResult;
+            session.resolvedAt = Time.unscaledTime;
+            session.resolvedQualityScore = sanitizedQualityScore;
+            _drillScrewSessionsByToken.Remove(sessionToken);
+            _activeDrillScrewSessionsByTaskKey.Remove(session.taskKey);
+
+            if (parsedResult == MinigameResult.Pass)
+            {
+                GameManager gameManager = GameManager.Instance;
+                if (gameManager != null)
+                {
+                    gameManager.RegisterDailyTaskLaunchContext(DrillScrewTaskType, session.taskKey);
+                }
+
+                MinigameRewardSystem.DistributeNetworkDrillScrewSessionReward(
+                    parsedResult,
+                    authoritativeOwnerKey,
+                    sessionToken,
+                    DrillScrewSessionRewardDedupeScope,
+                    sanitizedQualityScore);
+                SyncFromGameManager(forceTaskSnapshot: true);
+            }
+
+            SendDrillScrewResultResolutionResponseClientRpc(
+                sessionToken,
+                session.taskKey,
+                true,
+                string.Empty,
+                (int)parsedResult,
+                sanitizedQualityScore,
+                BuildTargetClientRpcParams(senderClientId));
+        }
+
         private void ExecuteMinigameRewardClaim(
             MinigameResult result,
             string minigameId,
@@ -2098,6 +2843,9 @@ namespace Game.Networking
             string reason,
             int cleaningSessionToken,
             int weldingSessionToken,
+            int measureCutSessionToken,
+            int pipePaintSessionToken,
+            int drillScrewSessionToken,
             string canonicalTaskKey,
             ClientRpcParams clientRpcParams = default)
         {
@@ -2110,6 +2858,9 @@ namespace Game.Networking
                 reason = reason,
                 cleaningSessionToken = cleaningSessionToken,
                 weldingSessionToken = weldingSessionToken,
+                measureCutSessionToken = measureCutSessionToken,
+                pipePaintSessionToken = pipePaintSessionToken,
+                drillScrewSessionToken = drillScrewSessionToken,
                 canonicalTaskKey = canonicalTaskKey
             };
 
@@ -2164,6 +2915,87 @@ namespace Game.Networking
             };
 
             OnWeldingResultResolutionResponse?.Invoke(response);
+        }
+
+        [ClientRpc]
+        private void SendMeasureCutResultResolutionResponseClientRpc(
+            int sessionToken,
+            string taskKey,
+            bool accepted,
+            string reason,
+            int resultValue,
+            float qualityScore,
+            ClientRpcParams clientRpcParams = default)
+        {
+            MinigameResult parsedResult = Enum.IsDefined(typeof(MinigameResult), resultValue)
+                ? (MinigameResult)resultValue
+                : MinigameResult.None;
+
+            MeasureCutResultResolutionResponse response = new MeasureCutResultResolutionResponse
+            {
+                sessionToken = sessionToken,
+                taskKey = taskKey,
+                accepted = accepted,
+                reason = reason,
+                result = parsedResult,
+                qualityScore = Mathf.Clamp(qualityScore, 0f, 100f)
+            };
+
+            OnMeasureCutResultResolutionResponse?.Invoke(response);
+        }
+
+        [ClientRpc]
+        private void SendPipePaintResultResolutionResponseClientRpc(
+            int sessionToken,
+            string taskKey,
+            bool accepted,
+            string reason,
+            int resultValue,
+            float coverageScore,
+            ClientRpcParams clientRpcParams = default)
+        {
+            MinigameResult parsedResult = Enum.IsDefined(typeof(MinigameResult), resultValue)
+                ? (MinigameResult)resultValue
+                : MinigameResult.None;
+
+            PipePaintResultResolutionResponse response = new PipePaintResultResolutionResponse
+            {
+                sessionToken = sessionToken,
+                taskKey = taskKey,
+                accepted = accepted,
+                reason = reason,
+                result = parsedResult,
+                coverageScore = Mathf.Clamp(coverageScore, 0f, 100f)
+            };
+
+            OnPipePaintResultResolutionResponse?.Invoke(response);
+        }
+
+        [ClientRpc]
+        private void SendDrillScrewResultResolutionResponseClientRpc(
+            int sessionToken,
+            string taskKey,
+            bool accepted,
+            string reason,
+            int resultValue,
+            float qualityScore,
+            ClientRpcParams clientRpcParams = default)
+        {
+            MinigameResult parsedResult = Enum.IsDefined(typeof(MinigameResult), resultValue)
+                ? (MinigameResult)resultValue
+                : MinigameResult.None;
+
+            DrillScrewResultResolutionResponse response = new DrillScrewResultResolutionResponse
+            {
+                sessionToken = sessionToken,
+                taskKey = taskKey,
+                accepted = accepted,
+                reason = reason,
+                result = parsedResult,
+                qualityScore = Mathf.Clamp(qualityScore, 0f, 100f)
+            };
+
+            OnDrillScrewResultResolutionResponse?.Invoke(response);
         }
 
         [ClientRpc]
@@ -2451,6 +3283,117 @@ namespace Game.Networking
                 }
             }
 
+            List<string> staleMeasureCutTaskKeys = null;
+            List<int> staleMeasureCutTokens = null;
+            foreach (KeyValuePair<string, MeasureCutSessionRuntime> entry in _activeMeasureCutSessionsByTaskKey)
+            {
+                MeasureCutSessionRuntime session = entry.Value;
+                if (session == null
+                    || session.status != MeasureCutSessionStatus.Pending
+                    || session.ownerClientId != disconnectedClientId)
+                {
+                    continue;
+                }
+
+                session.status = MeasureCutSessionStatus.Aborted;
+                session.resolvedResult = MinigameResult.Cancelled;
+                session.resolvedAt = Time.unscaledTime;
+                staleMeasureCutTaskKeys ??= new List<string>();
+                staleMeasureCutTokens ??= new List<int>();
+                staleMeasureCutTaskKeys.Add(entry.Key);
+                staleMeasureCutTokens.Add(session.sessionToken);
+            }
+
+            if (staleMeasureCutTaskKeys != null)
+            {
+                for (int i = 0; i < staleMeasureCutTaskKeys.Count; i++)
+                {
+                    _activeMeasureCutSessionsByTaskKey.Remove(staleMeasureCutTaskKeys[i]);
+                }
+            }
+
+            if (staleMeasureCutTokens != null)
+            {
+                for (int i = 0; i < staleMeasureCutTokens.Count; i++)
+                {
+                    _measureCutSessionsByToken.Remove(staleMeasureCutTokens[i]);
+                }
+            }
+
+            List<string> stalePipePaintTaskKeys = null;
+            List<int> stalePipePaintTokens = null;
+            foreach (KeyValuePair<string, PipePaintSessionRuntime> entry in _activePipePaintSessionsByTaskKey)
+            {
+                PipePaintSessionRuntime session = entry.Value;
+                if (session == null
+                    || session.status != PipePaintSessionStatus.Pending
+                    || session.ownerClientId != disconnectedClientId)
+                {
+                    continue;
+                }
+
+                session.status = PipePaintSessionStatus.Aborted;
+                session.resolvedResult = MinigameResult.Cancelled;
+                session.resolvedAt = Time.unscaledTime;
+                stalePipePaintTaskKeys ??= new List<string>();
+                stalePipePaintTokens ??= new List<int>();
+                stalePipePaintTaskKeys.Add(entry.Key);
+                stalePipePaintTokens.Add(session.sessionToken);
+            }
+
+            if (stalePipePaintTaskKeys != null)
+            {
+                for (int i = 0; i < stalePipePaintTaskKeys.Count; i++)
+                {
+                    _activePipePaintSessionsByTaskKey.Remove(stalePipePaintTaskKeys[i]);
+                }
+            }
+
+            if (stalePipePaintTokens != null)
+            {
+                for (int i = 0; i < stalePipePaintTokens.Count; i++)
+                {
+                    _pipePaintSessionsByToken.Remove(stalePipePaintTokens[i]);
+                }
+            }
+
+            List<string> staleDrillScrewTaskKeys = null;
+            List<int> staleDrillScrewTokens = null;
+            foreach (KeyValuePair<string, DrillScrewSessionRuntime> entry in _activeDrillScrewSessionsByTaskKey)
+            {
+                DrillScrewSessionRuntime session = entry.Value;
+                if (session == null
+                    || session.status != DrillScrewSessionStatus.Pending
+                    || session.ownerClientId != disconnectedClientId)
+                {
+                    continue;
+                }
+
+                session.status = DrillScrewSessionStatus.Aborted;
+                session.resolvedResult = MinigameResult.Cancelled;
+                session.resolvedAt = Time.unscaledTime;
+                staleDrillScrewTaskKeys ??= new List<string>();
+                staleDrillScrewTokens ??= new List<int>();
+                staleDrillScrewTaskKeys.Add(entry.Key);
+                staleDrillScrewTokens.Add(session.sessionToken);
+            }
+
+            if (staleDrillScrewTaskKeys != null)
+            {
+                for (int i = 0; i < staleDrillScrewTaskKeys.Count; i++)
+                {
+                    _activeDrillScrewSessionsByTaskKey.Remove(staleDrillScrewTaskKeys[i]);
+                }
+            }
+
+            if (staleDrillScrewTokens != null)
+            {
+                for (int i = 0; i < staleDrillScrewTokens.Count; i++)
+                {
+                    _drillScrewSessionsByToken.Remove(staleDrillScrewTokens[i]);
+                }
+            }
+
             List<string> staleComputerStationKeys = null;
             List<int> staleComputerTokens = null;
             foreach (KeyValuePair<string, ComputerSessionRuntime> entry in _activeComputerSessionsByStationKey)
@@ -2689,6 +3632,144 @@ namespace Game.Networking
             return true;
         }
 
+        private bool TryStartMeasureCutSession(
+            ulong senderClientId,
+            string normalizedTaskKey,
+            out MeasureCutSessionRuntime session,
+            out string reason)
+        {
+            session = null;
+            reason = string.Empty;
+            if (string.IsNullOrEmpty(normalizedTaskKey))
+            {
+                reason = "Measure/cut station unavailable.";
+                return false;
+            }
+
+            if (_activeMeasureCutSessionsByTaskKey.TryGetValue(normalizedTaskKey, out MeasureCutSessionRuntime active)
+                && active != null
+                && active.status == MeasureCutSessionStatus.Pending)
+            {
+                reason = "This measure/cut station is currently occupied.";
+                return false;
+            }
+
+            int token = ++_measureCutSessionSequence;
+            if (token <= 0)
+            {
+                _measureCutSessionSequence = 1;
+                token = _measureCutSessionSequence;
+            }
+
+            session = new MeasureCutSessionRuntime
+            {
+                sessionToken = token,
+                taskKey = normalizedTaskKey,
+                ownerKey = ResolveOwnerPlayerIdFromSender(senderClientId),
+                ownerClientId = senderClientId,
+                startedAt = Time.unscaledTime,
+                status = MeasureCutSessionStatus.Pending,
+                resolvedResult = MinigameResult.None,
+                resolvedAt = 0f
+            };
+
+            _activeMeasureCutSessionsByTaskKey[normalizedTaskKey] = session;
+            _measureCutSessionsByToken[token] = session;
+            return true;
+        }
+
+        private bool TryStartPipePaintSession(
+            ulong senderClientId,
+            string normalizedTaskKey,
+            out PipePaintSessionRuntime session,
+            out string reason)
+        {
+            session = null;
+            reason = string.Empty;
+            if (string.IsNullOrEmpty(normalizedTaskKey))
+            {
+                reason = "Pipe paint station unavailable.";
+                return false;
+            }
+
+            if (_activePipePaintSessionsByTaskKey.TryGetValue(normalizedTaskKey, out PipePaintSessionRuntime active)
+                && active != null
+                && active.status == PipePaintSessionStatus.Pending)
+            {
+                reason = "This pipe paint station is currently occupied.";
+                return false;
+            }
+
+            int token = ++_pipePaintSessionSequence;
+            if (token <= 0)
+            {
+                _pipePaintSessionSequence = 1;
+                token = _pipePaintSessionSequence;
+            }
+
+            session = new PipePaintSessionRuntime
+            {
+                sessionToken = token,
+                taskKey = normalizedTaskKey,
+                ownerKey = ResolveOwnerPlayerIdFromSender(senderClientId),
+                ownerClientId = senderClientId,
+                startedAt = Time.unscaledTime,
+                status = PipePaintSessionStatus.Pending,
+                resolvedResult = MinigameResult.None,
+                resolvedAt = 0f
+            };
+
+            _activePipePaintSessionsByTaskKey[normalizedTaskKey] = session;
+            _pipePaintSessionsByToken[token] = session;
+            return true;
+        }
+
+        private bool TryStartDrillScrewSession(
+            ulong senderClientId,
+            string normalizedTaskKey,
+            out DrillScrewSessionRuntime session,
+            out string reason)
+        {
+            session = null;
+            reason = string.Empty;
+            if (string.IsNullOrEmpty(normalizedTaskKey))
+            {
+                reason = "Drill/screw station unavailable.";
+                return false;
+            }
+
+            if (_activeDrillScrewSessionsByTaskKey.TryGetValue(normalizedTaskKey, out DrillScrewSessionRuntime active)
+                && active != null
+                && active.status == DrillScrewSessionStatus.Pending)
+            {
+                reason = "This drill/screw station is currently occupied.";
+                return false;
+            }
+
+            int token = ++_drillScrewSessionSequence;
+            if (token <= 0)
+            {
+                _drillScrewSessionSequence = 1;
+                token = _drillScrewSessionSequence;
+            }
+
+            session = new DrillScrewSessionRuntime
+            {
+                sessionToken = token,
+                taskKey = normalizedTaskKey,
+                ownerKey = ResolveOwnerPlayerIdFromSender(senderClientId),
+                ownerClientId = senderClientId,
+                startedAt = Time.unscaledTime,
+                status = DrillScrewSessionStatus.Pending,
+                resolvedResult = MinigameResult.None,
+                resolvedAt = 0f
+            };
+
+            _activeDrillScrewSessionsByTaskKey[normalizedTaskKey] = session;
+            _drillScrewSessionsByToken[token] = session;
+            return true;
+        }
+
         private void CleanupStaleCleaningSessions()
         {
             if (!IsServer || _activeCleaningSessionsByTaskKey.Count == 0)
@@ -2798,6 +3879,173 @@ namespace Game.Networking
             for (int i = 0; i < staleTokens.Count; i++)
             {
                 _weldingSessionsByToken.Remove(staleTokens[i]);
+            }
+        }
+
+        private void CleanupStaleMeasureCutSessions()
+        {
+            if (!IsServer || _activeMeasureCutSessionsByTaskKey.Count == 0)
+            {
+                return;
+            }
+
+            NetworkManager manager = NetworkManager.Singleton;
+            float now = Time.unscaledTime;
+            float timeout = Mathf.Max(5f, _cleaningSessionTimeoutSeconds);
+            List<string> staleTaskKeys = null;
+            List<int> staleTokens = null;
+
+            foreach (KeyValuePair<string, MeasureCutSessionRuntime> entry in _activeMeasureCutSessionsByTaskKey)
+            {
+                MeasureCutSessionRuntime session = entry.Value;
+                if (session == null || session.status != MeasureCutSessionStatus.Pending)
+                {
+                    continue;
+                }
+
+                bool ownerDisconnected = manager == null
+                    || !manager.IsListening
+                    || !manager.ConnectedClients.ContainsKey(session.ownerClientId);
+                bool timedOut = now - session.startedAt >= timeout;
+                if (!ownerDisconnected && !timedOut)
+                {
+                    continue;
+                }
+
+                session.status = MeasureCutSessionStatus.Aborted;
+                session.resolvedResult = MinigameResult.Cancelled;
+                session.resolvedAt = now;
+
+                staleTaskKeys ??= new List<string>();
+                staleTokens ??= new List<int>();
+                staleTaskKeys.Add(entry.Key);
+                staleTokens.Add(session.sessionToken);
+            }
+
+            if (staleTaskKeys == null)
+            {
+                return;
+            }
+
+            for (int i = 0; i < staleTaskKeys.Count; i++)
+            {
+                _activeMeasureCutSessionsByTaskKey.Remove(staleTaskKeys[i]);
+            }
+
+            for (int i = 0; i < staleTokens.Count; i++)
+            {
+                _measureCutSessionsByToken.Remove(staleTokens[i]);
+            }
+        }
+
+        private void CleanupStalePipePaintSessions()
+        {
+            if (!IsServer || _activePipePaintSessionsByTaskKey.Count == 0)
+            {
+                return;
+            }
+
+            NetworkManager manager = NetworkManager.Singleton;
+            float now = Time.unscaledTime;
+            float timeout = Mathf.Max(5f, _cleaningSessionTimeoutSeconds);
+            List<string> staleTaskKeys = null;
+            List<int> staleTokens = null;
+
+            foreach (KeyValuePair<string, PipePaintSessionRuntime> entry in _activePipePaintSessionsByTaskKey)
+            {
+                PipePaintSessionRuntime session = entry.Value;
+                if (session == null || session.status != PipePaintSessionStatus.Pending)
+                {
+                    continue;
+                }
+
+                bool ownerDisconnected = manager == null
+                    || !manager.IsListening
+                    || !manager.ConnectedClients.ContainsKey(session.ownerClientId);
+                bool timedOut = now - session.startedAt >= timeout;
+                if (!ownerDisconnected && !timedOut)
+                {
+                    continue;
+                }
+
+                session.status = PipePaintSessionStatus.Aborted;
+                session.resolvedResult = MinigameResult.Cancelled;
+                session.resolvedAt = now;
+
+                staleTaskKeys ??= new List<string>();
+                staleTokens ??= new List<int>();
+                staleTaskKeys.Add(entry.Key);
+                staleTokens.Add(session.sessionToken);
+            }
+
+            if (staleTaskKeys == null)
+            {
+                return;
+            }
+
+            for (int i = 0; i < staleTaskKeys.Count; i++)
+            {
+                _activePipePaintSessionsByTaskKey.Remove(staleTaskKeys[i]);
+            }
+
+            for (int i = 0; i < staleTokens.Count; i++)
+            {
+                _pipePaintSessionsByToken.Remove(staleTokens[i]);
+            }
+        }
+
+        private void CleanupStaleDrillScrewSessions()
+        {
+            if (!IsServer || _activeDrillScrewSessionsByTaskKey.Count == 0)
+            {
+                return;
+            }
+
+            NetworkManager manager = NetworkManager.Singleton;
+            float now = Time.unscaledTime;
+            float timeout = Mathf.Max(5f, _cleaningSessionTimeoutSeconds);
+            List<string> staleTaskKeys = null;
+            List<int> staleTokens = null;
+
+            foreach (KeyValuePair<string, DrillScrewSessionRuntime> entry in _activeDrillScrewSessionsByTaskKey)
+            {
+                DrillScrewSessionRuntime session = entry.Value;
+                if (session == null || session.status != DrillScrewSessionStatus.Pending)
+                {
+                    continue;
+                }
+
+                bool ownerDisconnected = manager == null
+                    || !manager.IsListening
+                    || !manager.ConnectedClients.ContainsKey(session.ownerClientId);
+                bool timedOut = now - session.startedAt >= timeout;
+                if (!ownerDisconnected && !timedOut)
+                {
+                    continue;
+                }
+
+                session.status = DrillScrewSessionStatus.Aborted;
+                session.resolvedResult = MinigameResult.Cancelled;
+                session.resolvedAt = now;
+                staleTaskKeys ??= new List<string>();
+                staleTokens ??= new List<int>();
+                staleTaskKeys.Add(entry.Key);
+                staleTokens.Add(session.sessionToken);
+            }
+
+            if (staleTaskKeys == null)
+            {
+                return;
+            }
+
+            for (int i = 0; i < staleTaskKeys.Count; i++)
+            {
+                _activeDrillScrewSessionsByTaskKey.Remove(staleTaskKeys[i]);
+            }
+
+            for (int i = 0; i < staleTokens.Count; i++)
+            {
+                _drillScrewSessionsByToken.Remove(staleTokens[i]);
             }
         }
 

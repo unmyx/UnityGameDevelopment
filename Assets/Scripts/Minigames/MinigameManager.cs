@@ -15,14 +15,26 @@ namespace Game.Minigames
         [Header("Minigame Canvases")]
         [SerializeField] private Canvas _cleaningCanvas;
         [SerializeField] private Canvas _weldingCanvas;
+        [SerializeField] private Canvas _measureCutCanvas;
+        [SerializeField] private Canvas _pipePaintCanvas;
+        [SerializeField] private Canvas _drillScrewCanvas;
 
         private const string CleaningMinigameId = "cleaning";
         private const string WeldingMinigameId = "welding";
+        private const string MeasureCutMinigameId = "measure_cut";
+        private const string PipePaintMinigameId = "pipe_paint";
+        private const string DrillScrewMinigameId = "drill_screw";
         private const string FreeplayCursorAuthorityOwner = "freeplay_camera";
         private const string MissingCleaningCanvasErrorMessage =
             "[MinigameManager] Cannot start cleaning minigame: missing CleaningCanvas reference in the active scene.";
         private const string MissingWeldingCanvasErrorMessage =
             "[MinigameManager] Cannot start welding minigame: missing WeldingCanvas reference in the active scene.";
+        private const string MissingMeasureCutCanvasErrorMessage =
+            "[MinigameManager] Cannot start measure/cut minigame: missing MeasureCutCanvas reference in the active scene.";
+        private const string MissingPipePaintCanvasErrorMessage =
+            "[MinigameManager] Cannot start paint minigame: missing PipePaintCanvas reference in the active scene.";
+        private const string MissingDrillScrewCanvasErrorMessage =
+            "[MinigameManager] Cannot start drill/screw minigame: missing DrillScrewCanvas reference in the active scene.";
 
         private static MinigameManager _instance;
         private static int _managerLifetimeSequence;
@@ -229,7 +241,13 @@ namespace Game.Minigames
             {
                 Debug.LogWarning("[MinigameManager] ObjectiveManager is missing; objective sync skipped after minigame end.");
             }
-            MinigameRewardSystem.DistributeRewards(result, minigameId, ownerPlayerId, _activeSessionToken, _managerLifetimeScope);
+            MinigameRewardSystem.DistributeRewards(
+                result,
+                minigameId,
+                ownerPlayerId,
+                _activeSessionToken,
+                _managerLifetimeScope,
+                _activeMinigame.GetMinigameData());
 
             _activeMinigame = null;
             _minigameGameObject = null;
@@ -347,6 +365,21 @@ namespace Game.Minigames
             return _weldingCanvas;
         }
 
+        public Canvas GetMeasureCutCanvas()
+        {
+            return _measureCutCanvas;
+        }
+
+        public Canvas GetPipePaintCanvas()
+        {
+            return _pipePaintCanvas;
+        }
+
+        public Canvas GetDrillScrewCanvas()
+        {
+            return _drillScrewCanvas;
+        }
+
         private void OnSceneLoaded(Scene scene, LoadSceneMode mode)
         {
             EnsureMinigameCanvasesHidden();
@@ -363,12 +396,30 @@ namespace Game.Minigames
             {
                 _weldingCanvas.enabled = false;
             }
+
+            if (_measureCutCanvas != null)
+            {
+                _measureCutCanvas.enabled = false;
+            }
+
+            if (_pipePaintCanvas != null)
+            {
+                _pipePaintCanvas.enabled = false;
+            }
+
+            if (_drillScrewCanvas != null)
+            {
+                _drillScrewCanvas.enabled = false;
+            }
         }
 
         private bool ValidateCanvasRequirements(System.Type minigameType, MinigameData data)
         {
             bool requiresCleaningCanvas = RequiresCleaningCanvas(minigameType, data);
             bool requiresWeldingCanvas = RequiresWeldingCanvas(minigameType, data);
+            bool requiresMeasureCutCanvas = RequiresMeasureCutCanvas(minigameType, data);
+            bool requiresPipePaintCanvas = RequiresPipePaintCanvas(minigameType, data);
+            bool requiresDrillScrewCanvas = RequiresDrillScrewCanvas(minigameType, data);
 
             if (requiresCleaningCanvas && _cleaningCanvas == null)
             {
@@ -379,6 +430,24 @@ namespace Game.Minigames
             if (requiresWeldingCanvas && _weldingCanvas == null)
             {
                 Debug.LogError(MissingWeldingCanvasErrorMessage, this);
+                return false;
+            }
+
+            if (requiresMeasureCutCanvas && _measureCutCanvas == null)
+            {
+                Debug.LogError(MissingMeasureCutCanvasErrorMessage, this);
+                return false;
+            }
+
+            if (requiresPipePaintCanvas && _pipePaintCanvas == null)
+            {
+                Debug.LogError(MissingPipePaintCanvasErrorMessage, this);
+                return false;
+            }
+
+            if (requiresDrillScrewCanvas && _drillScrewCanvas == null)
+            {
+                Debug.LogError(MissingDrillScrewCanvasErrorMessage, this);
                 return false;
             }
 
@@ -403,6 +472,36 @@ namespace Game.Minigames
             }
 
             return string.Equals(data?.minigameId, WeldingMinigameId, System.StringComparison.Ordinal);
+        }
+
+        private static bool RequiresMeasureCutCanvas(System.Type minigameType, MinigameData data)
+        {
+            if (minigameType == typeof(MeasureCutMinigame))
+            {
+                return true;
+            }
+
+            return string.Equals(data?.minigameId, MeasureCutMinigameId, System.StringComparison.Ordinal);
+        }
+
+        private static bool RequiresPipePaintCanvas(System.Type minigameType, MinigameData data)
+        {
+            if (minigameType == typeof(PipePaintMinigame))
+            {
+                return true;
+            }
+
+            return string.Equals(data?.minigameId, PipePaintMinigameId, System.StringComparison.Ordinal);
+        }
+
+        private static bool RequiresDrillScrewCanvas(System.Type minigameType, MinigameData data)
+        {
+            if (minigameType == typeof(DrillScrewMinigame))
+            {
+                return true;
+            }
+
+            return string.Equals(data?.minigameId, DrillScrewMinigameId, System.StringComparison.Ordinal);
         }
 
         private void WarnIfDuplicateTerminalFlow(string incomingFlowType, MinigameResult result)

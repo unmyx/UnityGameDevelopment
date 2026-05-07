@@ -180,7 +180,9 @@ namespace Game.UI
             EnsureSlotGridLayoutBinding();
             EnsureSlotGridCentered();
             _selectedSlotIndex = 0;
-            EnsureHeldItemAnchor();
+            // Intentionally avoid strict held-anchor binding in Awake.
+            // Camera/context registration may not be ready yet during bootstrap,
+            // and binding is retried safely in OnEnable/DelayedInitialRefresh/use-time paths.
 
             if (_enableSelectedItemModelPreview)
             {

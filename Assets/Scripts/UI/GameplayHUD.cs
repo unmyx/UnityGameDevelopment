@@ -492,6 +492,12 @@ namespace Game.UI
                 out int cleaningTotal,
                 out int weldingCompleted,
                 out int weldingTotal,
+                out int measureCutCompleted,
+                out int measureCutTotal,
+                out int pipePaintCompleted,
+                out int pipePaintTotal,
+                out int drillScrewCompleted,
+                out int drillScrewTotal,
                 out bool hasNextWave,
                 out float nextWaveEtaSeconds);
 
@@ -503,6 +509,9 @@ namespace Game.UI
                 $"Work Tasks:\n" +
                 $"- Clean {cleaningCompleted}/{cleaningTotal}\n" +
                 $"- Weld {weldingCompleted}/{weldingTotal}\n" +
+                $"- Measure/Cut {measureCutCompleted}/{measureCutTotal}\n" +
+                $"- Paint {pipePaintCompleted}/{pipePaintTotal}\n" +
+                $"- Drill/Screw {drillScrewCompleted}/{drillScrewTotal}\n" +
                 $"{waveSummary}";
 
             if (_lastObjectivesDisplay == objectivesList)

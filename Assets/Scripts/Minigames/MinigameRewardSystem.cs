@@ -13,11 +13,20 @@ namespace Game.Minigames
     {
         private const string CleaningMinigameId = "cleaning";
         private const string WeldingMinigameId = "welding";
+        private const string MeasureCutMinigameId = "measure_cut";
+        private const string PipePaintMinigameId = "pipe_paint";
+        private const string DrillScrewMinigameId = "drill_screw";
+        private const int MeasureCutBaseRewardCurrency = 60;
+        private const int PipePaintBaseRewardCurrency = 50;
+        private const int DrillScrewBaseRewardCurrency = 70;
 
         private static readonly Dictionary<string, int> PassRewardByMinigameId = new()
         {
             { "welding", 50 },
-            { "cleaning", 20 }
+            { "cleaning", 20 },
+            { "measure_cut", MeasureCutBaseRewardCurrency },
+            { "pipe_paint", PipePaintBaseRewardCurrency },
+            { "drill_screw", DrillScrewBaseRewardCurrency }
         };
 
         private static readonly HashSet<string> RewardedSessionKeys = new HashSet<string>();
@@ -46,6 +55,17 @@ namespace Game.Minigames
         /// </summary>
         public static void DistributeRewards(MinigameResult result, string minigameId, string ownerPlayerId, int sessionToken, int dedupeLifecycleScope)
         {
+            DistributeRewards(result, minigameId, ownerPlayerId, sessionToken, dedupeLifecycleScope, null);
+        }
+
+        public static void DistributeRewards(
+            MinigameResult result,
+            string minigameId,
+            string ownerPlayerId,
+            int sessionToken,
+            int dedupeLifecycleScope,
+            MinigameData minigameData)
+        {
             if (result != MinigameResult.Pass)
             {
                 return;
@@ -58,7 +78,10 @@ namespace Game.Minigames
             bool isNonAuthoritativeClient = isNetworkSession && manager.IsClient && !manager.IsServer;
             if (isNonAuthoritativeClient
                 && (string.Equals(normalizedId, CleaningMinigameId, System.StringComparison.Ordinal)
-                    || string.Equals(normalizedId, WeldingMinigameId, System.StringComparison.Ordinal)))
+                    || string.Equals(normalizedId, WeldingMinigameId, System.StringComparison.Ordinal)
+                    || string.Equals(normalizedId, MeasureCutMinigameId, System.StringComparison.Ordinal)
+                    || string.Equals(normalizedId, PipePaintMinigameId, System.StringComparison.Ordinal)
+                    || string.Equals(normalizedId, DrillScrewMinigameId, System.StringComparison.Ordinal)))
             {
                 // MP-21/MP-22: Cleaning/Welding rewards resolve only through authoritative session resolution.
                 return;
@@ -91,6 +114,22 @@ namespace Game.Minigames
             if (isRewardEligible && PassRewardByMinigameId.TryGetValue(normalizedId, out int configuredRewardCurrency))
             {
                 rewardCurrency = configuredRewardCurrency;
+
+                if (string.Equals(normalizedId, MeasureCutMinigameId, System.StringComparison.Ordinal))
+                {
+                    float qualityScore = ResolveMeasureCutQualityScore(minigameData);
+                    rewardCurrency = ComputeMeasureCutScaledReward(configuredRewardCurrency, qualityScore);
+                }
+                else if (string.Equals(normalizedId, PipePaintMinigameId, System.StringComparison.Ordinal))
+                {
+                    float coverageScore = ResolvePipePaintCoverageScore(minigameData);
+                    rewardCurrency = ComputePipePaintScaledReward(configuredRewardCurrency, coverageScore);
+                }
+                else if (string.Equals(normalizedId, DrillScrewMinigameId, System.StringComparison.Ordinal))
+                {
+                    float qualityScore = ResolveDrillScrewQualityScore(minigameData);
+                    rewardCurrency = ComputeDrillScrewScaledReward(configuredRewardCurrency, qualityScore);
+                }
             }
 
             if (rewardCurrency > 0)
@@ -119,6 +158,128 @@ namespace Game.Minigames
             EventBus.Publish(new MinigameRewardGrantedEvent(rewardEventData));
         }
 
+        private static float ResolveMeasureCutQualityScore(MinigameData minigameData)
+        {
+            if (minigameData == null || minigameData.parameters == null)
+            {
+                return 100f;
+            }
+
+            if (!minigameData.parameters.TryGetValue("measure_cut_quality", out object qualityValue) || qualityValue == null)
+            {
+                return 100f;
+            }
+
+            if (qualityValue is float floatValue)
+            {
+                return UnityEngine.Mathf.Clamp(floatValue, 0f, 100f);
+            }
+
+            if (qualityValue is int intValue)
+            {
+                return UnityEngine.Mathf.Clamp(intValue, 0f, 100f);
+            }
+
+            return 100f;
+        }
+
+        private static int ComputeMeasureCutScaledReward(int baseReward, float qualityScore)
+        {
+            float clampedQuality = UnityEngine.Mathf.Clamp(qualityScore, 0f, 100f);
+            float multiplier;
+            if (clampedQuality < 50f)
+            {
+                multiplier = 0.55f;
+            }
+            else if (clampedQuality < 70f)
+            {
+                multiplier = 0.75f;
+            }
+            else if (clampedQuality < 90f)
+            {
+                multiplier = 0.9f;
+            }
+            else
+            {
+                multiplier = 1f;
+            }
+
+            return UnityEngine.Mathf.Max(0, UnityEngine.Mathf.RoundToInt(baseReward * multiplier));
+        }
+
+        private static float ResolvePipePaintCoverageScore(MinigameData minigameData)
+        {
+            if (minigameData == null || minigameData.parameters == null)
+            {
+                return 0f;
+            }
+
+            if (!minigameData.parameters.TryGetValue("pipe_paint_coverage", out object coverageValue) || coverageValue == null)
+            {
+                return 0f;
+            }
+
+            if (coverageValue is float floatValue)
+            {
+                return UnityEngine.Mathf.Clamp(floatValue, 0f, 100f);
+            }
+
+            if (coverageValue is int intValue)
+            {
+                return UnityEngine.Mathf.Clamp(intValue, 0, 100);
+            }
+
+            return 0f;
+        }
+
+        private static int ComputePipePaintScaledReward(int baseReward, float coverageScore)
+        {
+            float clampedCoverage = UnityEngine.Mathf.Clamp(coverageScore, 0f, 100f);
+            float multiplier = clampedCoverage >= 85f ? 1f : 0.5f;
+            return UnityEngine.Mathf.Max(0, UnityEngine.Mathf.RoundToInt(baseReward * multiplier));
+        }
+
+        private static float ResolveDrillScrewQualityScore(MinigameData minigameData)
+        {
+            if (minigameData == null || minigameData.parameters == null)
+            {
+                return 0f;
+            }
+
+            if (!minigameData.parameters.TryGetValue("drill_screw_quality", out object qualityValue) || qualityValue == null)
+            {
+                return 0f;
+            }
+
+            if (qualityValue is float floatValue)
+            {
+                return UnityEngine.Mathf.Clamp(floatValue, 0f, 100f);
+            }
+
+            if (qualityValue is int intValue)
+            {
+                return UnityEngine.Mathf.Clamp(intValue, 0, 100);
+            }
+
+            return 0f;
+        }
+
+        private static int ComputeDrillScrewScaledReward(int baseReward, float qualityScore)
+        {
+            float clampedQuality = UnityEngine.Mathf.Clamp(qualityScore, 0f, 100f);
+            float multiplier = 0f;
+            if (clampedQuality >= 90f)
+            {
+                multiplier = 1f;
+            }
+            else if (clampedQuality >= 50f)
+            {
+                multiplier = 0.5f;
+            }
+
+            return UnityEngine.Mathf.Max(0, UnityEngine.Mathf.RoundToInt(baseReward * multiplier));
+        }
+
         public static void DistributeNetworkCleaningSessionReward(
             MinigameResult result,
             string ownerPlayerId,
@@ -135,6 +296,42 @@ namespace Game.Minigames
             int dedupeLifecycleScope)
         {
             DistributeRewards(result, WeldingMinigameId, ownerPlayerId, sessionToken, dedupeLifecycleScope);
+        }
+
+        public static void DistributeNetworkMeasureCutSessionReward(
+            MinigameResult result,
+            string ownerPlayerId,
+            int sessionToken,
+            int dedupeLifecycleScope,
+            float qualityScore)
+        {
+            MinigameData rewardData = new MinigameData();
+            rewardData.SetParameter("measure_cut_quality", qualityScore);
+            DistributeRewards(result, MeasureCutMinigameId, ownerPlayerId, sessionToken, dedupeLifecycleScope, rewardData);
+        }
+
+        public static void DistributeNetworkPipePaintSessionReward(
+            MinigameResult result,
+            string ownerPlayerId,
+            int sessionToken,
+            int dedupeLifecycleScope,
+            float coverageScore)
+        {
+            MinigameData rewardData = new MinigameData();
+            rewardData.SetParameter("pipe_paint_coverage", coverageScore);
+            DistributeRewards(result, PipePaintMinigameId, ownerPlayerId, sessionToken, dedupeLifecycleScope, rewardData);
+        }
+
+        public static void DistributeNetworkDrillScrewSessionReward(
+            MinigameResult result,
+            string ownerPlayerId,
+            int sessionToken,
+            int dedupeLifecycleScope,
+            float qualityScore)
+        {
+            MinigameData rewardData = new MinigameData();
+            rewardData.SetParameter("drill_screw_quality", qualityScore);
+            DistributeRewards(result, DrillScrewMinigameId, ownerPlayerId, sessionToken, dedupeLifecycleScope, rewardData);
         }
 
         private static string NormalizeMinigameId(string minigameId)

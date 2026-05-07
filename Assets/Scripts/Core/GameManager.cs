@@ -100,6 +100,9 @@ namespace Game.Core
 
         private const string DailyTaskTypeCleaning = "cleaning";
         private const string DailyTaskTypeWelding = "welding";
+        private const string DailyTaskTypeMeasureCut = "measure_cut";
+        private const string DailyTaskTypePipePaint = "pipe_paint";
+        private const string DailyTaskTypeDrillScrew = "drill_screw";
         private const string MenuSceneName = "Menu";
         private const string NetworkSandboxSceneName = "NetworkSandbox";
         private const string GameplaySceneName = "GameplayScene";
@@ -109,13 +112,22 @@ namespace Game.Core
         public const string UpgradeIdWeldingTool = "welding_tool";
         private const int DefaultCleaningAssignmentsPerDay = 2;
         private const int DefaultWeldingAssignmentsPerDay = 2;
+        private const int DefaultMeasureCutAssignmentsPerDay = 1;
+        private const int DefaultPipePaintAssignmentsPerDay = 1;
+        private const int DefaultDrillScrewAssignmentsPerDay = 1;
         private const int DayDifficultyTierSpanDays = 2;
         private const int WeldingActiveTargetDayBonusSpanDays = 3;
         private const int MaxWeldingActiveTargetDayBonus = 1;
         private const float CleaningDayDifficultyStep = 0.06f;
         private const float WeldingDayDifficultyStep = 0.05f;
+        private const float MeasureCutDayDifficultyStep = 0.05f;
+        private const float PipePaintDayDifficultyStep = 0.05f;
+        private const float DrillScrewDayDifficultyStep = 0.05f;
         private const float MinCleaningDayDifficultyMultiplier = 0.64f;
         private const float MinWeldingDayDifficultyMultiplier = 0.68f;
+        private const float MinMeasureCutDayDifficultyMultiplier = 0.68f;
+        private const float MinPipePaintDayDifficultyMultiplier = 0.68f;
+        private const float MinDrillScrewDayDifficultyMultiplier = 0.68f;
         private const int MaxConsecutiveFailedWorkdaysBeforeGameOver = 3;
         private const int FailedLieEscalationThresholdPerDay = 3;
         private const float DefaultWorkdayStartHour = 7f;
@@ -897,6 +909,12 @@ namespace Game.Core
             out int cleaningTotal,
             out int weldingCompleted,
             out int weldingTotal,
+            out int measureCutCompleted,
+            out int measureCutTotal,
+            out int pipePaintCompleted,
+            out int pipePaintTotal,
+            out int drillScrewCompleted,
+            out int drillScrewTotal,
             out bool hasPendingWave,
             out float nextWaveEtaSeconds)
         {
@@ -904,6 +922,12 @@ namespace Game.Core
             cleaningTotal = 0;
             weldingCompleted = 0;
             weldingTotal = 0;
+            measureCutCompleted = 0;
+            measureCutTotal = 0;
+            pipePaintCompleted = 0;
+            pipePaintTotal = 0;
+            drillScrewCompleted = 0;
+            drillScrewTotal = 0;
 
             EnsureDailyAssignmentsForCurrentWorkday();
             EnsureWorkdayRuntimeInitialized();
@@ -939,6 +963,38 @@ namespace Game.Core
                     {
                         weldingCompleted++;
                     }
+
+                    continue;
+                }
+
+                if (string.Equals(assignment.taskType, DailyTaskTypeMeasureCut, StringComparison.Ordinal))
+                {
+                    measureCutTotal++;
+                    if (assignment.isCompleted)
+                    {
+                        measureCutCompleted++;
+                    }
+                    continue;
+                }
+
+                if (string.Equals(assignment.taskType, DailyTaskTypePipePaint, StringComparison.Ordinal))
+                {
+                    pipePaintTotal++;
+                    if (assignment.isCompleted)
+                    {
+                        pipePaintCompleted++;
+                    }
+
+                    continue;
+                }
+
+                if (string.Equals(assignment.taskType, DailyTaskTypeDrillScrew, StringComparison.Ordinal))
+                {
+                    drillScrewTotal++;
+                    if (assignment.isCompleted)
+                    {
+                        drillScrewCompleted++;
+                    }
                 }
             }
 
@@ -968,6 +1024,24 @@ namespace Game.Core
         {
             float scaledMultiplier = 1f - (WeldingDayDifficultyStep * GetCurrentDayDifficultyTier());
             return Mathf.Clamp(scaledMultiplier, MinWeldingDayDifficultyMultiplier, 1f);
+        }
+
+        public float GetMeasureCutDayDifficultyMultiplier()
+        {
+            float scaledMultiplier = 1f - (MeasureCutDayDifficultyStep * GetCurrentDayDifficultyTier());
+            return Mathf.Clamp(scaledMultiplier, MinMeasureCutDayDifficultyMultiplier, 1f);
+        }
+
+        public float GetPipePaintDayDifficultyMultiplier()
+        {
+            float scaledMultiplier = 1f - (PipePaintDayDifficultyStep * GetCurrentDayDifficultyTier());
+            return Mathf.Clamp(scaledMultiplier, MinPipePaintDayDifficultyMultiplier, 1f);
+        }
+
+        public float GetDrillScrewDayDifficultyMultiplier()
+        {
+            float scaledMultiplier = 1f - (DrillScrewDayDifficultyStep * GetCurrentDayDifficultyTier());
+            return Mathf.Clamp(scaledMultiplier, MinDrillScrewDayDifficultyMultiplier, 1f);
         }
 
         public int GetWeldingActiveTargetCountBonusForCurrentDay()
@@ -1481,13 +1555,21 @@ namespace Game.Core
                 }
             }
 
+            bool addedCompatibilityAssignment = TryBackfillDevTestingAssignmentsForLegacyWorkday();
             _dailyTaskAssignmentDay = _dailyTaskAssignments.Count > 0 ? _currentDay : -1;
             ClearPendingDailyTaskLaunchContext();
 
             if (_currentRunPhase == RunPhase.Work)
             {
                 EnsureDailyAssignmentsForCurrentWorkday();
-                EnsureWorkdayRuntimeInitialized();
+                if (addedCompatibilityAssignment)
+                {
+                    RebuildTaskWaveScheduleForCurrentWorkday();
+                }
+                else
+                {
+                    EnsureWorkdayRuntimeInitialized();
+                }
             }
         }
 
@@ -1627,6 +1709,7 @@ namespace Game.Core
                 }
             }
 
+            bool addedCompatibilityAssignment = TryBackfillDevTestingAssignmentsForLegacyWorkday();
             _dailyTaskAssignmentDay = _dailyTaskAssignments.Count > 0 ? _currentDay : -1;
             _generatedTaskWaves.Clear();
             _unlockedTaskKeys.Clear();
@@ -1677,8 +1760,97 @@ namespace Game.Core
             }
 
             _workdayRuntimeInitialized = _generatedTaskWaves.Count > 0 || _unlockedTaskKeys.Count > 0;
+            if (addedCompatibilityAssignment)
+            {
+                RebuildTaskWaveScheduleForCurrentWorkday();
+            }
             RestoreOwnedToolUpgradesFromSave(ownedTools);
             ClearPendingDailyTaskLaunchContext();
+        }
+
+        // DEVELOPMENT/TEMPORARY TEST SUPPORT:
+        // Backward-compatibility backfill for saves/workdays created before newer work minigames existed.
+        // This preserves existing assignments and only adds at most one assignment per supported type when missing.
+        private bool TryBackfillDevTestingAssignmentsForLegacyWorkday()
+        {
+            if (_currentRunPhase != RunPhase.Work || _dailyTaskAssignments == null || _dailyTaskAssignments.Count <= 0)
+            {
+                return false;
+            }
+
+            bool changed = false;
+            changed |= TryEnsureAtLeastOneAssignmentForTaskType(DailyTaskTypeCleaning, CollectCleaningTaskKeysFromScene());
+            changed |= TryEnsureAtLeastOneAssignmentForTaskType(DailyTaskTypeWelding, CollectWeldingTaskKeysFromScene());
+            changed |= TryEnsureAtLeastOneAssignmentForTaskType(DailyTaskTypeMeasureCut, CollectMeasureCutTaskKeysFromScene());
+            changed |= TryEnsureAtLeastOneAssignmentForTaskType(DailyTaskTypePipePaint, CollectPipePaintTaskKeysFromScene());
+            changed |= TryEnsureAtLeastOneAssignmentForTaskType(DailyTaskTypeDrillScrew, CollectDrillScrewTaskKeysFromScene());
+            return changed;
+        }
+
+        // DEVELOPMENT/TEMPORARY TEST SUPPORT:
+        // Guarantees that a task type can be tested when a valid station exists in-scene.
+        private bool TryEnsureAtLeastOneAssignmentForTaskType(string taskType, List<string> taskKeys)
+        {
+            if (string.IsNullOrEmpty(taskType) || taskKeys == null || taskKeys.Count <= 0)
+            {
+                return false;
+            }
+
+            string normalizedType = NormalizeTaskType(taskType);
+            if (string.IsNullOrEmpty(normalizedType))
+            {
+                return false;
+            }
+
+            for (int i = 0; i < _dailyTaskAssignments.Count; i++)
+            {
+                DailyTaskAssignment assignment = _dailyTaskAssignments[i];
+                if (assignment == null)
+                {
+                    continue;
+                }
+
+                if (string.Equals(NormalizeTaskType(assignment.taskType), normalizedType, StringComparison.Ordinal))
+                {
+                    return false;
+                }
+            }
+
+            for (int i = 0; i < taskKeys.Count; i++)
+            {
+                string normalizedKey = NormalizeTaskKey(taskKeys[i]);
+                if (string.IsNullOrEmpty(normalizedKey))
+                {
+                    continue;
+                }
+
+                bool alreadyAssigned = false;
+                for (int j = 0; j < _dailyTaskAssignments.Count; j++)
+                {
+                    DailyTaskAssignment existing = _dailyTaskAssignments[j];
+                    if (existing == null)
+                    {
+                        continue;
+                    }
+
+                    if (string.Equals(NormalizeTaskType(existing.taskType), normalizedType, StringComparison.Ordinal)
+                        && string.Equals(NormalizeTaskKey(existing.taskKey), normalizedKey, StringComparison.Ordinal))
+                    {
+                        alreadyAssigned = true;
+                        break;
+                    }
+                }
+
+                if (alreadyAssigned)
+                {
+                    continue;
+                }
+
+                _dailyTaskAssignments.Add(new DailyTaskAssignment(normalizedType, normalizedKey));
+                return true;
+            }
+
+            return false;
         }
 
         public bool TryRegisterStolenLootPickup(string itemId)
@@ -2872,12 +3044,28 @@ namespace Game.Core
 
             List<string> cleaningKeys = CollectCleaningTaskKeysFromScene();
             List<string> weldingKeys = CollectWeldingTaskKeysFromScene();
+            List<string> measureCutKeys = CollectMeasureCutTaskKeysFromScene();
+            List<string> pipePaintKeys = CollectPipePaintTaskKeysFromScene();
+            List<string> drillScrewKeys = CollectDrillScrewTaskKeysFromScene();
 
             int cleaningAssignmentTarget = GetScaledAssignmentTargetCountForCurrentDay(DefaultCleaningAssignmentsPerDay);
             int weldingAssignmentTarget = GetScaledAssignmentTargetCountForCurrentDay(DefaultWeldingAssignmentsPerDay);
+            int measureCutAssignmentTarget = GetScaledAssignmentTargetCountForCurrentDay(DefaultMeasureCutAssignmentsPerDay);
+            int pipePaintAssignmentTarget = GetScaledAssignmentTargetCountForCurrentDay(DefaultPipePaintAssignmentsPerDay);
+            int drillScrewAssignmentTarget = GetScaledAssignmentTargetCountForCurrentDay(DefaultDrillScrewAssignmentsPerDay);
 
             AppendRandomAssignments(DailyTaskTypeCleaning, cleaningKeys, cleaningAssignmentTarget);
             AppendRandomAssignments(DailyTaskTypeWelding, weldingKeys, weldingAssignmentTarget);
+            AppendRandomAssignments(DailyTaskTypeMeasureCut, measureCutKeys, measureCutAssignmentTarget);
+            AppendRandomAssignments(DailyTaskTypePipePaint, pipePaintKeys, pipePaintAssignmentTarget);
+            AppendRandomAssignments(DailyTaskTypeDrillScrew, drillScrewKeys, drillScrewAssignmentTarget);
+            // DEVELOPMENT/TEMPORARY TEST SUPPORT:
+            // Keep core work minigames reliably testable when valid stations exist in the scene.
+            TryEnsureAtLeastOneAssignmentForTaskType(DailyTaskTypeCleaning, cleaningKeys);
+            TryEnsureAtLeastOneAssignmentForTaskType(DailyTaskTypeWelding, weldingKeys);
+            TryEnsureAtLeastOneAssignmentForTaskType(DailyTaskTypeMeasureCut, measureCutKeys);
+            TryEnsureAtLeastOneAssignmentForTaskType(DailyTaskTypePipePaint, pipePaintKeys);
+            TryEnsureAtLeastOneAssignmentForTaskType(DailyTaskTypeDrillScrew, drillScrewKeys);
 
             _dailyTaskAssignmentDay = _currentDay;
             RebuildTaskWaveScheduleForCurrentWorkday();
@@ -3034,6 +3222,10 @@ namespace Game.Core
 
             _generatedTaskWaves.Add(firstWave);
 
+            // Ensure wave 1 includes at least one pending key per assigned task type
+            // without replacing existing wave entries.
+            EnsureAssignedTaskTypesAppearInFirstWave(firstWave, pendingKeys);
+
             int nextKeyIndex = firstWaveCount;
             float nextWaveHour = DefaultWorkdayStartHour;
             float minDelayMinutes = Mathf.Max(0.5f, Mathf.Min(_waveDelayMinMinutes, _waveDelayMaxMinutes));
@@ -3085,6 +3277,65 @@ namespace Game.Core
 
             _workdayRuntimeInitialized = true;
             CatchUpDueTaskWaves();
+        }
+
+        private void EnsureAssignedTaskTypesAppearInFirstWave(GeneratedTaskWave firstWave, List<string> pendingKeys)
+        {
+            if (_currentRunPhase != RunPhase.Work
+                || firstWave == null
+                || firstWave.taskKeys == null
+                || pendingKeys == null)
+            {
+                return;
+            }
+
+            Dictionary<string, string> firstPendingKeyByType = new Dictionary<string, string>(StringComparer.Ordinal);
+            for (int i = 0; i < _dailyTaskAssignments.Count; i++)
+            {
+                DailyTaskAssignment assignment = _dailyTaskAssignments[i];
+                if (assignment == null || assignment.isCompleted)
+                {
+                    continue;
+                }
+
+                string normalizedTaskType = NormalizeTaskType(assignment.taskType);
+                if (string.IsNullOrEmpty(normalizedTaskType))
+                {
+                    continue;
+                }
+
+                string normalizedKey = NormalizeTaskKey(assignment.taskKey);
+                if (string.IsNullOrEmpty(normalizedKey))
+                {
+                    continue;
+                }
+
+                if (!pendingKeys.Contains(normalizedKey))
+                {
+                    continue;
+                }
+
+                if (!firstPendingKeyByType.ContainsKey(normalizedTaskType))
+                {
+                    firstPendingKeyByType[normalizedTaskType] = normalizedKey;
+                }
+            }
+
+            if (firstPendingKeyByType.Count <= 0)
+            {
+                return;
+            }
+
+            foreach (KeyValuePair<string, string> pair in firstPendingKeyByType)
+            {
+                string taskKeyForType = pair.Value;
+                if (string.IsNullOrEmpty(taskKeyForType) || firstWave.taskKeys.Contains(taskKeyForType))
+                {
+                    continue;
+                }
+
+                firstWave.taskKeys.Add(taskKeyForType);
+            }
         }
 
         private void CatchUpDueTaskWaves()
@@ -3271,6 +3522,63 @@ namespace Game.Core
             return keys;
         }
 
+        private static List<string> CollectMeasureCutTaskKeysFromScene()
+        {
+            PipeCuttingInteractable[] interactables = UnityEngine.Object.FindObjectsByType<PipeCuttingInteractable>(FindObjectsInactive.Exclude);
+            List<string> keys = new List<string>(interactables.Length);
+            for (int i = 0; i < interactables.Length; i++)
+            {
+                PipeCuttingInteractable interactable = interactables[i];
+                if (interactable == null)
+                {
+                    continue;
+                }
+
+                TryAddTaskKey(keys, interactable.GetDailyTaskLocationKey());
+            }
+
+            keys.Sort(StringComparer.Ordinal);
+            return keys;
+        }
+
+        private static List<string> CollectPipePaintTaskKeysFromScene()
+        {
+            PipePaintInteractable[] interactables = UnityEngine.Object.FindObjectsByType<PipePaintInteractable>(FindObjectsInactive.Exclude);
+            List<string> keys = new List<string>(interactables.Length);
+            for (int i = 0; i < interactables.Length; i++)
+            {
+                PipePaintInteractable interactable = interactables[i];
+                if (interactable == null)
+                {
+                    continue;
+                }
+
+                TryAddTaskKey(keys, interactable.GetDailyTaskLocationKey());
+            }
+
+            keys.Sort(StringComparer.Ordinal);
+            return keys;
+        }
+
+        private static List<string> CollectDrillScrewTaskKeysFromScene()
+        {
+            DrillScrewInteractable[] interactables = UnityEngine.Object.FindObjectsByType<DrillScrewInteractable>(FindObjectsInactive.Exclude);
+            List<string> keys = new List<string>(interactables.Length);
+            for (int i = 0; i < interactables.Length; i++)
+            {
+                DrillScrewInteractable interactable = interactables[i];
+                if (interactable == null)
+                {
+                    continue;
+                }
+
+                TryAddTaskKey(keys, interactable.GetDailyTaskLocationKey());
+            }
+
+            keys.Sort(StringComparer.Ordinal);
+            return keys;
+        }
+
         private void AppendRandomAssignments(string taskType, List<string> taskKeys, int maxAssignments)
         {
             if (maxAssignments <= 0 || taskKeys == null || taskKeys.Count == 0)
@@ -3317,7 +3625,10 @@ namespace Game.Core
         private static bool IsRewardGatedDailyTaskType(string taskType)
         {
             return string.Equals(taskType, DailyTaskTypeCleaning, StringComparison.Ordinal)
-                || string.Equals(taskType, DailyTaskTypeWelding, StringComparison.Ordinal);
+                || string.Equals(taskType, DailyTaskTypeWelding, StringComparison.Ordinal)
+                || string.Equals(taskType, DailyTaskTypeMeasureCut, StringComparison.Ordinal)
+                || string.Equals(taskType, DailyTaskTypePipePaint, StringComparison.Ordinal)
+                || string.Equals(taskType, DailyTaskTypeDrillScrew, StringComparison.Ordinal);
         }
 
         private static string NormalizeTaskKey(string taskKey)

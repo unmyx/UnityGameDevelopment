@@ -1,0 +1,24 @@
+%YAML 1.1
+%TAG !u! tag:unity3d.com,2011:
+--- !u!114 &11400000
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 0}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: 1e67e95d9e9a73c41a67121139ebfbd5, type: 3}
+  m_Name: ObjPipePaint1
+  m_EditorClassIdentifier: Assembly-CSharp::Game.Core.Objective
+  _objectiveId: obj_pipe_paint_1
+  _objectiveName: Objective Pipe Paint
+  _objectiveDescription: Complete this objective.
+  _objectiveType: 2
+  _targetMinigameId: pipe_paint
+  _requiredCompletions: 1
+  _countPassOnly: 1
+  _rewardCurrency: 30
+  _rewardItems: []
+  _isActive: 1
