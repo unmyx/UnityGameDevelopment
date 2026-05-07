@@ -35,7 +35,7 @@ namespace Game.Core
     /// </summary>
     public class ObjectiveManager : MonoBehaviour
     {
-        private const string ObjectiveResourcesPath = "Objectives";
+        private const string ObjectiveResourcesPath = ResourcePaths.Objectives;
         private const string MissingInstanceMessage =
             "[ObjectiveManager] Instance requested but no ObjectiveManager exists in the active scene. " +
             "Add ObjectiveManager to your bootstrap/gameplay scene instead of relying on runtime auto-creation.";

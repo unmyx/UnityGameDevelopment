@@ -15,7 +15,7 @@ namespace Game.Networking
     [DisallowMultipleComponent]
     public class NetworkSessionLifecycleCoordinator : MonoBehaviour
     {
-        private const string MenuSceneName = "Menu";
+        private const string MenuSceneName = SceneIds.Menu;
 
         private static NetworkSessionLifecycleCoordinator _instance;
         private static bool _localShutdownRequested;

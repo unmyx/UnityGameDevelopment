@@ -8,6 +8,7 @@ using Game.Player;
 using Game.Systems;
 using Unity.Netcode;
 using UnityEngine;
+using UnityEngine.SceneManagement;
 
 namespace Game.Networking
 {
@@ -170,13 +171,16 @@ namespace Game.Networking
         [SerializeField] private float _cleaningSessionTimeoutSeconds = 45f;
         private const string GoldRingItemId = "wedding_ring_gold";
         private const string SilverRingItemId = "wedding_ring_silver";
-        private const string GoldRingDropPrefabResourcesPath = "Prefabs/GameplayCritical/GoldRingPickup_Net";
-        private const string SilverRingDropPrefabResourcesPath = "Prefabs/GameplayCritical/SilverRingPickup_Net";
+        private const string GoldRingDropPrefabResourcesPath = ResourcePaths.NetworkGoldRingDropPrefab;
+        private const string SilverRingDropPrefabResourcesPath = ResourcePaths.NetworkSilverRingDropPrefab;
 
         private static NetworkSessionProgressAuthority _localRequester;
         private static NetworkSessionProgressAuthority _authoritativePublisher;
         private static GameObject _cachedGoldRingDropNetworkPrefab;
         private static GameObject _cachedSilverRingDropNetworkPrefab;
+        private static bool _hasValidatedCriticalResourcePaths;
+        private static readonly HashSet<string> LoggedRequesterFallbackTelemetry = new HashSet<string>();
+        private static readonly HashSet<string> LoggedRequesterValidationWarnings = new HashSet<string>();
 
         private readonly NetworkVariable<int> _currentDay = new NetworkVariable<int>(
             1, NetworkVariableReadPermission.Everyone, NetworkVariableWritePermission.Server);
@@ -386,11 +390,31 @@ namespace Game.Networking
                 if (authority != null)
                 {
                     _localRequester = authority;
+                    LogLocalRequesterFallbackTelemetry("local_player_transform", 1, authority);
+                    ValidateRequesterFallbackWindow("local_player_transform");
+                    ValidateRequesterOwnerMatch(authority, "local_player_transform");
                     return true;
                 }
             }
 
             NetworkSessionProgressAuthority[] authorities = FindObjectsByType<NetworkSessionProgressAuthority>(FindObjectsInactive.Exclude);
+            int ownerSpawnedCount = 0;
+            for (int i = 0; i < authorities.Length; i++)
+            {
+                NetworkSessionProgressAuthority candidate = authorities[i];
+                if (candidate != null && candidate.IsOwner && candidate.IsSpawned)
+                {
+                    ownerSpawnedCount++;
+                }
+            }
+
+            ValidateRequesterSceneScanAmbiguity(ownerSpawnedCount, authorities);
+            if (ownerSpawnedCount != 1)
+            {
+                authority = null;
+                return false;
+            }
+
             for (int i = 0; i < authorities.Length; i++)
             {
                 NetworkSessionProgressAuthority candidate = authorities[i];
@@ -398,12 +422,144 @@ namespace Game.Networking
                 {
                     _localRequester = candidate;
                     authority = candidate;
+                    LogLocalRequesterFallbackTelemetry("scene_scan", authorities.Length, candidate);
+                    ValidateRequesterFallbackWindow("scene_scan");
+                    ValidateRequesterOwnerMatch(candidate, "scene_scan");
                     return true;
                 }
             }
 
             authority = null;
             return false;
+        }
+
+        [System.Diagnostics.Conditional("UNITY_EDITOR")]
+        [System.Diagnostics.Conditional("DEVELOPMENT_BUILD")]
+        private static void ValidateRequesterFallbackWindow(string source)
+        {
+            NetworkManager manager = NetworkManager.Singleton;
+            FallbackWindow window = FallbackWindow.Stable;
+            if (manager == null || !manager.IsListening)
+            {
+                window = FallbackWindow.Bootstrap;
+            }
+            else if (_localRequester == null || !_localRequester.IsSpawned)
+            {
+                window = FallbackWindow.OwnershipRebind;
+                if (!manager.IsConnectedClient || !manager.ConnectedClients.ContainsKey(manager.LocalClientId))
+                {
+                    window = FallbackWindow.LateNetworkSpawnSync;
+                }
+            }
+
+            if (window == FallbackWindow.OwnershipRebind || window == FallbackWindow.LateNetworkSpawnSync || window == FallbackWindow.Bootstrap)
+            {
+                return;
+            }
+
+            string sceneName = SceneManager.GetActiveScene().name;
+            string key = $"NSA_WINDOW|{sceneName}|{source}|{FallbackGuardrails.ToToken(window)}";
+            if (!LoggedRequesterValidationWarnings.Add(key))
+            {
+                return;
+            }
+
+            Debug.LogWarning(
+                $"[FallbackValidation][NSA_REQUESTER_WINDOW] scene='{sceneName}' source='{source}' window='{FallbackGuardrails.ToToken(window)}' expected='ownership_rebind|late_network_spawn_sync' risk='stable_session_fallback'");
+        }
+
+        [System.Diagnostics.Conditional("UNITY_EDITOR")]
+        [System.Diagnostics.Conditional("DEVELOPMENT_BUILD")]
+        private static void ValidateRequesterOwnerMatch(NetworkSessionProgressAuthority resolvedAuthority, string source)
+        {
+            if (resolvedAuthority == null)
+            {
+                return;
+            }
+
+            NetworkManager manager = NetworkManager.Singleton;
+            if (manager == null || !manager.IsListening)
+            {
+                return;
+            }
+
+            bool ownerMismatch = !resolvedAuthority.IsOwner;
+            bool spawnedMismatch = !resolvedAuthority.IsSpawned;
+            bool modeMismatch = manager.IsServer && !manager.IsClient;
+            if (!ownerMismatch && !spawnedMismatch && !modeMismatch)
+            {
+                return;
+            }
+
+            string sceneName = SceneManager.GetActiveScene().name;
+            string key = $"NSA_OWNER_MISMATCH|{sceneName}|{source}|{System.Runtime.CompilerServices.RuntimeHelpers.GetHashCode(resolvedAuthority)}|{ownerMismatch}|{spawnedMismatch}|{modeMismatch}";
+            if (!LoggedRequesterValidationWarnings.Add(key))
+            {
+                return;
+            }
+
+            Debug.LogWarning(
+                $"[FallbackValidation][NSA_REQUESTER_OWNER_MISMATCH] scene='{sceneName}' source='{source}' ownerMismatch='{ownerMismatch}' spawnedMismatch='{spawnedMismatch}' modeMismatch='{modeMismatch}' risk='ownership_misbind'");
+        }
+
+        [System.Diagnostics.Conditional("UNITY_EDITOR")]
+        [System.Diagnostics.Conditional("DEVELOPMENT_BUILD")]
+        private static void ValidateRequesterSceneScanAmbiguity(int ownerSpawnedCount, NetworkSessionProgressAuthority[] allCandidates)
+        {
+            string sceneName = SceneManager.GetActiveScene().name;
+            string key = $"NSA_SCENE_SCAN_COUNT|{sceneName}|{ownerSpawnedCount}";
+            if (!LoggedRequesterValidationWarnings.Add(key))
+            {
+                return;
+            }
+
+            if (ownerSpawnedCount == 1)
+            {
+                return;
+            }
+
+            Debug.LogWarning(
+                $"[FallbackValidation][NSA_SCENE_SCAN_AMBIGUITY] scene='{sceneName}' ownerSpawnedCandidates='{ownerSpawnedCount}' totalCandidates='{(allCandidates != null ? allCandidates.Length : 0)}' risk='nondeterministic_owner_selection'");
+        }
+
+        [System.Diagnostics.Conditional("UNITY_EDITOR")]
+        [System.Diagnostics.Conditional("DEVELOPMENT_BUILD")]
+        private static void LogLocalRequesterFallbackTelemetry(
+            string source,
+            int candidates,
+            NetworkSessionProgressAuthority chosenAuthority)
+        {
+            string sceneName = SceneManager.GetActiveScene().name;
+            NetworkManager manager = NetworkManager.Singleton;
+            string netMode = "offline";
+            ulong localClientId = 0UL;
+            if (manager != null)
+            {
+                localClientId = manager.LocalClientId;
+                if (manager.IsListening)
+                {
+                    netMode = manager.IsServer
+                        ? (manager.IsClient ? "host" : "server")
+                        : "client";
+                }
+            }
+
+            string chosenAuthorityInstanceId = chosenAuthority != null
+                ? System.Runtime.CompilerServices.RuntimeHelpers.GetHashCode(chosenAuthority).ToString()
+                : "none";
+            string key =
+                $"NSA_LOCAL_REQUESTER_FALLBACK|{sceneName}|{netMode}|{localClientId}|{source}|{chosenAuthorityInstanceId}";
+            if (!LoggedRequesterFallbackTelemetry.Add(key))
+            {
+                return;
+            }
+
+            string chosenNetworkObjectId = chosenAuthority != null && chosenAuthority.IsSpawned
+                ? chosenAuthority.NetworkObjectId.ToString()
+                : "none";
+            Debug.LogWarning(
+                $"[FallbackTelemetry][NSA_LOCAL_REQUESTER_FALLBACK] scene='{sceneName}' netMode='{netMode}' localClientId='{localClientId}' " +
+                $"source='{source}' candidates='{Mathf.Max(0, candidates)}' chosenNetworkObjectId='{chosenNetworkObjectId}' risk='ownership_misbind'");
         }
 
         public override void OnNetworkSpawn()
@@ -430,6 +586,7 @@ namespace Game.Networking
 
             if (IsServer)
             {
+                ValidateCriticalResourcePathsOnce();
                 SyncFromGameManager(forceTaskSnapshot: true);
 
                 if (IsAuthoritativePublisher() && NetworkManager != null)
@@ -3512,6 +3669,31 @@ namespace Game.Networking
         private static string ResolveOwnerPlayerIdFromSender(ulong senderClientId)
         {
             return NetworkOwnerKeyUtility.GetOwnerKeyForSender(senderClientId);
+        }
+
+        [System.Diagnostics.Conditional("UNITY_EDITOR")]
+        [System.Diagnostics.Conditional("DEVELOPMENT_BUILD")]
+        private static void ValidateCriticalResourcePathsOnce()
+        {
+            if (_hasValidatedCriticalResourcePaths)
+            {
+                return;
+            }
+
+            _hasValidatedCriticalResourcePaths = true;
+            if (Resources.Load<GameObject>(GoldRingDropPrefabResourcesPath) == null)
+            {
+                Debug.LogWarning(
+                    $"[NetworkSessionProgressAuthority] Missing resource at '{GoldRingDropPrefabResourcesPath}'. " +
+                    "Tracked network drop for gold ring will fail.");
+            }
+
+            if (Resources.Load<GameObject>(SilverRingDropPrefabResourcesPath) == null)
+            {
+                Debug.LogWarning(
+                    $"[NetworkSessionProgressAuthority] Missing resource at '{SilverRingDropPrefabResourcesPath}'. " +
+                    "Tracked network drop for silver ring will fail.");
+            }
         }
 
         private static bool TryResolveTrackedLootNetworkDropPrefab(string itemId, out GameObject prefab)

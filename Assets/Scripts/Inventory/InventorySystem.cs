@@ -40,7 +40,7 @@ namespace Game.Inventory
     [DefaultExecutionOrder(-1000)]
     public class InventorySystem : MonoBehaviour
     {
-        private const string ItemResourcesPath = "Items";
+        private const string ItemResourcesPath = ResourcePaths.InventoryItems;
 
         private static InventorySystem _instance;
         private static bool _hasLoggedFallbackInstanceLookup;

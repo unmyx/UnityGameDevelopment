@@ -357,7 +357,12 @@ namespace Game.Interaction
 
             if (_stationCameraPose == null)
             {
-                Transform pose = transform.Find(CameraPoseChildName);
+                HierarchyLookup.TryFindChild(
+                    transform,
+                    CameraPoseChildName,
+                    out Transform pose,
+                    this,
+                    nameof(_stationCameraPose));
                 if (pose != null)
                 {
                     _stationCameraPose = pose;
@@ -367,7 +372,12 @@ namespace Game.Interaction
 
             if (_stationCameraLookTarget == null)
             {
-                Transform lookTarget = transform.Find(LookTargetChildName);
+                HierarchyLookup.TryFindChild(
+                    transform,
+                    LookTargetChildName,
+                    out Transform lookTarget,
+                    this,
+                    nameof(_stationCameraLookTarget));
                 if (lookTarget != null)
                 {
                     _stationCameraLookTarget = lookTarget;

@@ -89,7 +89,7 @@ namespace Game.Systems
         [SerializeField] private LieDialogueSet lieDialogueSet;
         [SerializeField] private List<LieDialogueSet> lieDialogueSets = new();
         [SerializeField] private bool randomizeLieDialogueSetSelection = true;
-        [SerializeField] private string fallbackLieDialogueResourcePath = "Dialogue/Lie/DefaultLieDialogueSet";
+        [SerializeField] private string fallbackLieDialogueResourcePath = ResourcePaths.DefaultLieDialogueSet;
         [SerializeField] private string lieDialogueEntryStepId = "intro";
         [SerializeField] private string lieQuestionText = "Hey! What are you doing in here?!";
         [SerializeField] private string lieAnswer1Text = "I'm just going to the bathroom.";
@@ -148,6 +148,7 @@ namespace Game.Systems
         private bool _isPostLieFailChaseActive;
         private bool _hasResolvedLieFailResolution;
         private bool _hasLoggedSerializedFallbackTargetUsage;
+        private bool _hasValidatedFallbackDialoguePath;
         private Transform _runtimeTarget;
 
         private bool hasCaughtPlayer;
@@ -238,6 +239,30 @@ namespace Game.Systems
             }
 
             TryAutoAssignReferences();
+            ValidateFallbackDialoguePathOnce();
+        }
+
+        [System.Diagnostics.Conditional("UNITY_EDITOR")]
+        [System.Diagnostics.Conditional("DEVELOPMENT_BUILD")]
+        private void ValidateFallbackDialoguePathOnce()
+        {
+            if (_hasValidatedFallbackDialoguePath)
+            {
+                return;
+            }
+
+            _hasValidatedFallbackDialoguePath = true;
+            if (string.IsNullOrWhiteSpace(fallbackLieDialogueResourcePath))
+            {
+                return;
+            }
+
+            if (Resources.Load<LieDialogueSet>(fallbackLieDialogueResourcePath) == null)
+            {
+                Debug.LogWarning(
+                    $"[NPCController] Missing fallback lie dialogue resource at '{fallbackLieDialogueResourcePath}'.",
+                    this);
+            }
         }
 
         private void OnEnable()

@@ -3,7 +3,9 @@ using Game.Input;
 using Game.Minigames;
 using Game.Networking;
 using Game.Player;
+using System.Collections.Generic;
 using UnityEngine;
+using UnityEngine.SceneManagement;
 
 namespace Game.Interaction
 {
@@ -29,6 +31,7 @@ namespace Game.Interaction
     /// </summary>
     public class InteractionSystem : MonoBehaviour
     {
+        private static readonly HashSet<string> LoggedFallbackValidationWarnings = new HashSet<string>();
         private const string LocalPlayerId = PlayerContextRegistry.DefaultLocalPlayerId;
 
         [Header("Raycast Interaction")]
@@ -417,6 +420,7 @@ namespace Game.Interaction
                 && firstPersonCamera != null)
             {
                 _raycastCamera = firstPersonCamera.GetComponent<Camera>();
+                ValidateCompatibilityCameraFallbackWindow("compatibility_camera");
             }
 
             if (_raycastCamera == null)
@@ -425,6 +429,7 @@ namespace Game.Interaction
                 if (_raycastCamera != null && !_hasLoggedParentCameraFallback)
                 {
                     _hasLoggedParentCameraFallback = true;
+                    ValidateParentCameraAmbiguity();
                     Debug.LogWarning(
                         "[InteractionSystem] Using parent Camera fallback for raycast camera. " +
                         "Prefer deterministic local PlayerContext camera binding.",
@@ -433,6 +438,53 @@ namespace Game.Interaction
             }
 
             // TODO(MP-4): Remove compatibility fallback once per-player camera bootstrap/rebind is explicit in scene setup.
+        }
+
+        [System.Diagnostics.Conditional("UNITY_EDITOR")]
+        [System.Diagnostics.Conditional("DEVELOPMENT_BUILD")]
+        private void ValidateCompatibilityCameraFallbackWindow(string source)
+        {
+            FallbackWindow window = PlayerContextLocator.IsCompatibilityFallbackAllowed()
+                ? FallbackWindow.Bootstrap
+                : FallbackWindow.Stable;
+            if (window != FallbackWindow.Stable)
+            {
+                return;
+            }
+
+            string sceneName = SceneManager.GetActiveScene().name;
+            string key = $"INT_CAMERA_WINDOW|{sceneName}|{source}";
+            if (!LoggedFallbackValidationWarnings.Add(key))
+            {
+                return;
+            }
+
+            Debug.LogWarning(
+                $"[FallbackValidation][INT_CAMERA_WINDOW] scene='{sceneName}' source='{source}' window='{FallbackGuardrails.ToToken(window)}' expected='bootstrap|recovery' risk='stable_camera_fallback'",
+                this);
+        }
+
+        [System.Diagnostics.Conditional("UNITY_EDITOR")]
+        [System.Diagnostics.Conditional("DEVELOPMENT_BUILD")]
+        private void ValidateParentCameraAmbiguity()
+        {
+            Camera[] activeCameras = FindObjectsByType<Camera>(FindObjectsInactive.Exclude);
+            int count = activeCameras != null ? activeCameras.Length : 0;
+            if (count <= 1)
+            {
+                return;
+            }
+
+            string sceneName = SceneManager.GetActiveScene().name;
+            string key = $"INT_PARENT_CAMERA_AMBIGUITY|{sceneName}|{count}";
+            if (!LoggedFallbackValidationWarnings.Add(key))
+            {
+                return;
+            }
+
+            Debug.LogWarning(
+                $"[FallbackValidation][INT_PARENT_CAMERA_AMBIGUITY] scene='{sceneName}' activeCameras='{count}' chosenCamera='{_raycastCamera?.name ?? "null"}' risk='wrong_camera_bind'",
+                this);
         }
 
         private bool IsLocallyOwnedInteractionSystem()

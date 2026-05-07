@@ -18,6 +18,8 @@ namespace Game.UI
     /// </summary>
     public class InventoryGridUI : MonoBehaviour
     {
+        private static readonly System.Collections.Generic.HashSet<string> LoggedFallbackValidationWarnings =
+            new System.Collections.Generic.HashSet<string>();
         private const string LocalPlayerId = PlayerContextRegistry.DefaultLocalPlayerId;
 
         [Serializable]
@@ -1079,6 +1081,7 @@ namespace Game.UI
             PlayerContextLocator.TryGetLocalFirstPersonCamera(out FirstPersonCamera firstPersonCamera);
             if (firstPersonCamera == null && PlayerContextLocator.IsCompatibilityFallbackAllowed())
             {
+                ValidateFirstPersonCameraFallbackAmbiguity("held_anchor_rebind");
                 PlayerContextLocator.TryGetFirstPersonCamera(out firstPersonCamera);
                 if (firstPersonCamera != null && !_hasLoggedCompatibilityCameraFallback)
                 {
@@ -1100,7 +1103,12 @@ namespace Game.UI
                 return false;
             }
 
-            Transform reboundAnchor = cameraTransform.Find(HeldItemAnchorChildName);
+            HierarchyLookup.TryFindChild(
+                cameraTransform,
+                HeldItemAnchorChildName,
+                out Transform reboundAnchor,
+                this,
+                nameof(_heldItemAnchor));
             if (reboundAnchor == null)
             {
                 _lastHeldItemAnchorBindFailureReason =
@@ -1136,6 +1144,7 @@ namespace Game.UI
             PlayerContextLocator.TryGetLocalFirstPersonCamera(out FirstPersonCamera firstPersonCamera);
             if (firstPersonCamera == null && PlayerContextLocator.IsCompatibilityFallbackAllowed())
             {
+                ValidateFirstPersonCameraFallbackAmbiguity("owned_camera_transform");
                 PlayerContextLocator.TryGetFirstPersonCamera(out firstPersonCamera);
                 if (firstPersonCamera != null && !_hasLoggedCompatibilityCameraFallback)
                 {
@@ -1145,6 +1154,27 @@ namespace Game.UI
             }
 
             return firstPersonCamera != null ? firstPersonCamera.transform : null;
+        }
+
+        [System.Diagnostics.Conditional("UNITY_EDITOR")]
+        [System.Diagnostics.Conditional("DEVELOPMENT_BUILD")]
+        private void ValidateFirstPersonCameraFallbackAmbiguity(string source)
+        {
+            FirstPersonCamera[] candidates = FindObjectsByType<FirstPersonCamera>(FindObjectsInactive.Include);
+            int count = candidates != null ? candidates.Length : 0;
+            string sceneName = UnityEngine.SceneManagement.SceneManager.GetActiveScene().name;
+            string key = $"INV_FP_CAMERA_AMBIGUITY|{sceneName}|{source}|{count}";
+            if (!LoggedFallbackValidationWarnings.Add(key))
+            {
+                return;
+            }
+
+            if (count == 0 || count > 1)
+            {
+                Debug.LogWarning(
+                    $"[FallbackValidation][INV_FP_CAMERA_AMBIGUITY] scene='{sceneName}' source='{source}' candidates='{count}' risk='wrong_camera_bind'",
+                    this);
+            }
         }
 
         private static bool IsNetworkSession()

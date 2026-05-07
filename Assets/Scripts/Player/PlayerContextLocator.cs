@@ -1,3 +1,4 @@
+using Game.Core;
 using Game.Interaction;
 using Game.UI;
 using UnityEngine;
@@ -19,6 +20,8 @@ namespace Game.Player
         private static bool _hasResolvedLocalContext;
         private static readonly HashSet<string> LoggedFallbackCallsites = new HashSet<string>();
         private static readonly HashSet<string> LoggedFallbackDetails = new HashSet<string>();
+        private static readonly HashSet<string> LoggedStructuredFallbackTelemetry = new HashSet<string>();
+        private static readonly HashSet<string> LoggedFallbackValidationWarnings = new HashSet<string>();
 
         public static bool TryGetPrimaryContext(out PlayerContext context)
         {
@@ -244,6 +247,14 @@ namespace Game.Player
 
             LogCompatibilityFallback("TryGetInventoryGridUI(find)");
             LogFallbackDetailOnce("TryGetInventoryGridUI(find)", "Falling back to scene-wide InventoryGridUI lookup.");
+            ValidateInventoryGridUiFallbackCandidatesOnce();
+            InventoryGridUI[] candidates = Object.FindObjectsByType<InventoryGridUI>(FindObjectsInactive.Include);
+            if (candidates == null || candidates.Length != 1)
+            {
+                inventoryGridUI = null;
+                return false;
+            }
+
             inventoryGridUI = Object.FindAnyObjectByType<InventoryGridUI>();
             return inventoryGridUI != null;
         }
@@ -352,6 +363,8 @@ namespace Game.Player
             InventoryGridUI inventoryGridUI = Object.FindAnyObjectByType<InventoryGridUI>();
             GameplayHUD gameplayHUD = Object.FindAnyObjectByType<GameplayHUD>();
 
+            ValidateSoloFallbackAmbiguityOnce();
+
             if (playerController == null
                 && firstPersonCamera == null
                 && inputHandler == null
@@ -392,9 +405,168 @@ namespace Game.Player
                 inventoryGridUI,
                 gameplayHUD);
 
+            LogSoloFallbackTelemetry(
+                playerController,
+                firstPersonCamera,
+                inputHandler,
+                interactionSystem,
+                inventoryGridUI,
+                gameplayHUD,
+                missingDetails);
+            ValidateSoloFallbackWindowOnce();
+
             // TODO(MP-4): Remove scene-wide compatibility fallback scans after deterministic bootstrap/rebind is fully explicit per scene.
             context = _soloFallbackContext;
             return true;
+        }
+
+        [System.Diagnostics.Conditional("UNITY_EDITOR")]
+        [System.Diagnostics.Conditional("DEVELOPMENT_BUILD")]
+        private static void LogSoloFallbackTelemetry(
+            PlayerController playerController,
+            FirstPersonCamera firstPersonCamera,
+            PlayerInputHandler inputHandler,
+            InteractionSystem interactionSystem,
+            InventoryGridUI inventoryGridUI,
+            GameplayHUD gameplayHUD,
+            string missingDetails)
+        {
+            string sceneName = SceneManager.GetActiveScene().name;
+            string netMode = ResolveNetMode();
+            string fallbackWindow = ResolveFallbackWindow();
+            string resolutionSignature =
+                $"{(playerController != null ? "1" : "0")}{(firstPersonCamera != null ? "1" : "0")}{(inputHandler != null ? "1" : "0")}{(interactionSystem != null ? "1" : "0")}{(inventoryGridUI != null ? "1" : "0")}{(gameplayHUD != null ? "1" : "0")}";
+
+            string key = $"PCL_SOLO_CONTEXT_BUILT|{sceneName}|{netMode}|{fallbackWindow}|{resolutionSignature}";
+            if (!LoggedStructuredFallbackTelemetry.Add(key))
+            {
+                return;
+            }
+
+            Debug.LogWarning(
+                $"[FallbackTelemetry][PCL_SOLO_CONTEXT_BUILT] scene='{sceneName}' netMode='{netMode}' fallbackWindow='{fallbackWindow}' " +
+                $"resolved={{playerController:{(playerController != null ? 1 : 0)},firstPersonCamera:{(firstPersonCamera != null ? 1 : 0)},inputHandler:{(inputHandler != null ? 1 : 0)},interactionSystem:{(interactionSystem != null ? 1 : 0)},inventoryGridUI:{(inventoryGridUI != null ? 1 : 0)},gameplayHUD:{(gameplayHUD != null ? 1 : 0)}}} " +
+                $"missing='{missingDetails}' risk='owner/camera/hud_misbind'");
+        }
+
+        private static string ResolveNetMode()
+        {
+            NetworkManager networkManager = NetworkManager.Singleton;
+            if (networkManager == null || !networkManager.IsListening)
+            {
+                return "offline";
+            }
+
+            if (networkManager.IsServer)
+            {
+                return networkManager.IsClient ? "host" : "server";
+            }
+
+            return "client";
+        }
+
+        private static string ResolveFallbackWindow()
+        {
+            if (_startupRealtime < 0f)
+            {
+                _startupRealtime = Time.realtimeSinceStartup;
+            }
+
+            bool bootstrapWindow = (Time.realtimeSinceStartup - _startupRealtime) <= BootstrapFallbackGraceSeconds;
+            return bootstrapWindow ? "bootstrap_window" : "recovery_window";
+        }
+
+        private static FallbackWindow ResolvePlayerContextFallbackWindow()
+        {
+            if (_startupRealtime < 0f)
+            {
+                _startupRealtime = Time.realtimeSinceStartup;
+            }
+
+            bool bootstrapWindow = (Time.realtimeSinceStartup - _startupRealtime) <= BootstrapFallbackGraceSeconds;
+            if (bootstrapWindow)
+            {
+                return FallbackWindow.Bootstrap;
+            }
+
+            if (PlayerContextRegistry.Contexts.Count == 0)
+            {
+                return FallbackWindow.Recovery;
+            }
+
+            return FallbackWindow.Stable;
+        }
+
+        [System.Diagnostics.Conditional("UNITY_EDITOR")]
+        [System.Diagnostics.Conditional("DEVELOPMENT_BUILD")]
+        private static void ValidateSoloFallbackWindowOnce()
+        {
+            FallbackWindow window = ResolvePlayerContextFallbackWindow();
+            if (window == FallbackWindow.Bootstrap || window == FallbackWindow.Recovery)
+            {
+                return;
+            }
+
+            string sceneName = SceneManager.GetActiveScene().name;
+            string key = $"PCL_SOLO_CONTEXT_WINDOW|{sceneName}|{FallbackGuardrails.ToToken(window)}";
+            if (!LoggedFallbackValidationWarnings.Add(key))
+            {
+                return;
+            }
+
+            Debug.LogWarning(
+                $"[FallbackValidation][PCL_SOLO_CONTEXT_WINDOW] scene='{sceneName}' window='{FallbackGuardrails.ToToken(window)}' expected='bootstrap|recovery' risk='stable_fallback_usage'");
+        }
+
+        [System.Diagnostics.Conditional("UNITY_EDITOR")]
+        [System.Diagnostics.Conditional("DEVELOPMENT_BUILD")]
+        private static void ValidateInventoryGridUiFallbackCandidatesOnce()
+        {
+            InventoryGridUI[] candidates = Object.FindObjectsByType<InventoryGridUI>(FindObjectsInactive.Include);
+            int count = candidates != null ? candidates.Length : 0;
+            string sceneName = SceneManager.GetActiveScene().name;
+            string key = $"PCL_INV_UI_CANDIDATES|{sceneName}|{count}";
+            if (!LoggedFallbackValidationWarnings.Add(key))
+            {
+                return;
+            }
+
+            if (count == 0 || count > 1)
+            {
+                Debug.LogWarning(
+                    $"[FallbackValidation][PCL_INV_UI_CANDIDATES] scene='{sceneName}' window='{FallbackGuardrails.ToToken(ResolvePlayerContextFallbackWindow())}' candidates='{count}' risk='unsafe_scene_search'");
+            }
+        }
+
+        [System.Diagnostics.Conditional("UNITY_EDITOR")]
+        [System.Diagnostics.Conditional("DEVELOPMENT_BUILD")]
+        private static void ValidateSoloFallbackAmbiguityOnce()
+        {
+            int playerControllers = Object.FindObjectsByType<PlayerController>(FindObjectsInactive.Include).Length;
+            int firstPersonCameras = Object.FindObjectsByType<FirstPersonCamera>(FindObjectsInactive.Include).Length;
+            int inputHandlers = Object.FindObjectsByType<PlayerInputHandler>(FindObjectsInactive.Include).Length;
+            int interactionSystems = Object.FindObjectsByType<InteractionSystem>(FindObjectsInactive.Include).Length;
+            int inventoryGridUis = Object.FindObjectsByType<InventoryGridUI>(FindObjectsInactive.Include).Length;
+            int gameplayHuds = Object.FindObjectsByType<GameplayHUD>(FindObjectsInactive.Include).Length;
+
+            string signature = $"{playerControllers},{firstPersonCameras},{inputHandlers},{interactionSystems},{inventoryGridUis},{gameplayHuds}";
+            string sceneName = SceneManager.GetActiveScene().name;
+            string key = $"PCL_SOLO_CONTEXT_AMBIGUITY|{sceneName}|{signature}";
+            if (!LoggedFallbackValidationWarnings.Add(key))
+            {
+                return;
+            }
+
+            if (playerControllers > 1
+                || firstPersonCameras > 1
+                || inputHandlers > 1
+                || interactionSystems > 1
+                || inventoryGridUis > 1
+                || gameplayHuds > 1)
+            {
+                Debug.LogWarning(
+                    $"[FallbackValidation][PCL_SOLO_CONTEXT_AMBIGUITY] scene='{sceneName}' counts='PlayerController:{playerControllers},FirstPersonCamera:{firstPersonCameras},PlayerInputHandler:{inputHandlers},InteractionSystem:{interactionSystems},InventoryGridUI:{inventoryGridUis},GameplayHUD:{gameplayHuds}' risk='nondeterministic_first_match'");
+            }
         }
 
         private static void LogCompatibilityFallback(string callsite)

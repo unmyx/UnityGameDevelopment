@@ -1,6 +1,7 @@
 using Game.Interaction;
 using Game.Player;
 using Game.Systems;
+using Game.Core;
 using System;
 using System.Collections.Generic;
 using Unity.Netcode;
@@ -26,6 +27,8 @@ namespace Game.Networking
         private static string _cachedSpawnMarkerSceneName = string.Empty;
         private static readonly List<Transform> CachedSpawnMarkers = new List<Transform>();
         private static readonly HashSet<string> LoggedFallbackProbeWarnings = new HashSet<string>();
+        private static readonly HashSet<string> LoggedSpawnMarkerScanTelemetry = new HashSet<string>();
+        private static readonly HashSet<string> LoggedSpawnValidationWarnings = new HashSet<string>();
 
         private PlayerController _playerController;
         private PlayerInputHandler _inputHandler;
@@ -256,6 +259,8 @@ namespace Game.Networking
                 return false;
             }
 
+            ValidateSpawnMarkerDeterminism(ownerClientId, markerIndex);
+
             position = marker.position;
             rotation = marker.rotation;
             return true;
@@ -264,6 +269,8 @@ namespace Game.Networking
         private static void RefreshSpawnMarkerCacheIfNeeded()
         {
             string activeSceneName = UnityEngine.SceneManagement.SceneManager.GetActiveScene().name;
+            bool sceneChanged = !string.Equals(_cachedSpawnMarkerSceneName, activeSceneName, StringComparison.Ordinal);
+            bool cacheEmpty = CachedSpawnMarkers.Count == 0;
             if (string.Equals(_cachedSpawnMarkerSceneName, activeSceneName, StringComparison.Ordinal)
                 && CachedSpawnMarkers.Count > 0)
             {
@@ -302,6 +309,126 @@ namespace Game.Networking
             }
 
             CachedSpawnMarkers.Sort((a, b) => string.CompareOrdinal(a.name, b.name));
+            ValidateSpawnMarkerScanWindow(reason: sceneChanged ? "scene_changed" : "cache_empty");
+            ValidateSpawnMarkerAmbiguity(activeSceneName);
+            LogSpawnMarkerScanTelemetry(
+                activeSceneName,
+                sceneChanged ? "scene_changed" : "cache_empty",
+                allTransforms.Length,
+                CachedSpawnMarkers.Count);
+        }
+
+        [System.Diagnostics.Conditional("UNITY_EDITOR")]
+        [System.Diagnostics.Conditional("DEVELOPMENT_BUILD")]
+        private static void ValidateSpawnMarkerScanWindow(string reason)
+        {
+            FallbackWindow window = FallbackWindow.Stable;
+            if (reason == "scene_changed")
+            {
+                window = FallbackWindow.SceneTransition;
+            }
+            else if (reason == "cache_empty")
+            {
+                window = FallbackWindow.LateNetworkSpawnSync;
+            }
+
+            if (window == FallbackWindow.SceneTransition || window == FallbackWindow.LateNetworkSpawnSync)
+            {
+                return;
+            }
+
+            string sceneName = SceneManager.GetActiveScene().name;
+            string key = $"NOG_SCAN_WINDOW|{sceneName}|{reason}|{FallbackGuardrails.ToToken(window)}";
+            if (!LoggedSpawnValidationWarnings.Add(key))
+            {
+                return;
+            }
+
+            Debug.LogWarning(
+                $"[FallbackValidation][NOG_SCAN_WINDOW] scene='{sceneName}' reason='{reason}' window='{FallbackGuardrails.ToToken(window)}' expected='scene_transition|late_network_spawn_sync' risk='unexpected_spawn_scan'");
+        }
+
+        [System.Diagnostics.Conditional("UNITY_EDITOR")]
+        [System.Diagnostics.Conditional("DEVELOPMENT_BUILD")]
+        private static void ValidateSpawnMarkerAmbiguity(string sceneName)
+        {
+            int markerCount = CachedSpawnMarkers.Count;
+            string key = $"NOG_MARKER_COUNT|{sceneName}|{markerCount}";
+            if (!LoggedSpawnValidationWarnings.Add(key))
+            {
+                return;
+            }
+
+            if (markerCount <= 0)
+            {
+                Debug.LogWarning(
+                    $"[FallbackValidation][NOG_MARKER_COUNT] scene='{sceneName}' markersFound='0' risk='deterministic_offset_fallback'");
+                return;
+            }
+
+            HashSet<string> names = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            for (int i = 0; i < CachedSpawnMarkers.Count; i++)
+            {
+                Transform marker = CachedSpawnMarkers[i];
+                if (marker == null)
+                {
+                    continue;
+                }
+
+                if (!names.Add(marker.name))
+                {
+                    Debug.LogWarning(
+                        $"[FallbackValidation][NOG_MARKER_NAME_COLLISION] scene='{sceneName}' markerName='{marker.name}' risk='name_collision_ambiguity'");
+                    break;
+                }
+            }
+        }
+
+        [System.Diagnostics.Conditional("UNITY_EDITOR")]
+        [System.Diagnostics.Conditional("DEVELOPMENT_BUILD")]
+        private static void ValidateSpawnMarkerDeterminism(ulong ownerClientId, int markerIndex)
+        {
+            string sceneName = SceneManager.GetActiveScene().name;
+            int markerNameHash = 17;
+            unchecked
+            {
+                for (int i = 0; i < CachedSpawnMarkers.Count; i++)
+                {
+                    Transform marker = CachedSpawnMarkers[i];
+                    markerNameHash = (markerNameHash * 31) + (marker != null ? marker.name.GetHashCode() : 0);
+                }
+            }
+
+            string key = $"NOG_MARKER_PICK|{sceneName}|{ownerClientId}|{markerIndex}|{CachedSpawnMarkers.Count}|{markerNameHash}";
+            if (!LoggedSpawnValidationWarnings.Add(key))
+            {
+                return;
+            }
+
+            Debug.LogWarning(
+                $"[FallbackValidation][NOG_MARKER_PICK] scene='{sceneName}' ownerClientId='{ownerClientId}' markerIndex='{markerIndex}' markerCount='{CachedSpawnMarkers.Count}' markerListHash='{markerNameHash}' risk='ordering_dependence'");
+        }
+
+        [System.Diagnostics.Conditional("UNITY_EDITOR")]
+        [System.Diagnostics.Conditional("DEVELOPMENT_BUILD")]
+        private static void LogSpawnMarkerScanTelemetry(
+            string sceneName,
+            string reason,
+            int totalTransforms,
+            int markersFound)
+        {
+            string key = $"NOG_SPAWN_MARKER_SCAN|{sceneName}|{reason}|{markersFound}";
+            if (!LoggedSpawnMarkerScanTelemetry.Add(key))
+            {
+                return;
+            }
+
+            string risk = markersFound == 0
+                ? "deterministic_offset_possible_if_zero"
+                : "marker_scan_rebuild";
+            Debug.LogWarning(
+                $"[FallbackTelemetry][NOG_SPAWN_MARKER_SCAN] scene='{sceneName}' reason='{reason}' totalTransforms='{Mathf.Max(0, totalTransforms)}' " +
+                $"markerPrefix='{SpawnMarkerPrefix}' markersFound='{Mathf.Max(0, markersFound)}' risk='{risk}'");
         }
 
         private Vector3 ResolveFallbackSpawnPosition(ulong ownerClientId)

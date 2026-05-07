@@ -1,4 +1,5 @@
 using System.Collections.Generic;
+using Game.Core;
 using Unity.Netcode;
 using UnityEngine;
 using UnityEngine.SceneManagement;
@@ -11,10 +12,10 @@ namespace Game.Networking
     /// </summary>
     public static class NetworkSafeSceneRouter
     {
-        private const string MenuSceneName = "Menu";
-        private const string HomeSceneName = "HomeScene";
-        private const string GameplaySceneName = "GameplayScene";
-        private const string NetworkSandboxSceneName = "NetworkSandbox";
+        private const string MenuSceneName = SceneIds.Menu;
+        private const string HomeSceneName = SceneIds.Home;
+        private const string GameplaySceneName = SceneIds.Gameplay;
+        private const string NetworkSandboxSceneName = SceneIds.NetworkSandbox;
 
         private static readonly HashSet<string> LoggedBlockedClientRoutes = new HashSet<string>();
 

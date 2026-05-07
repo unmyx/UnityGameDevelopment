@@ -103,10 +103,10 @@ namespace Game.Core
         private const string DailyTaskTypeMeasureCut = "measure_cut";
         private const string DailyTaskTypePipePaint = "pipe_paint";
         private const string DailyTaskTypeDrillScrew = "drill_screw";
-        private const string MenuSceneName = "Menu";
-        private const string NetworkSandboxSceneName = "NetworkSandbox";
-        private const string GameplaySceneName = "GameplayScene";
-        private const string HomeSceneName = "HomeScene";
+        private const string MenuSceneName = SceneIds.Menu;
+        private const string NetworkSandboxSceneName = SceneIds.NetworkSandbox;
+        private const string GameplaySceneName = SceneIds.Gameplay;
+        private const string HomeSceneName = SceneIds.Home;
         public const string UpgradeIdInventoryQuickSlots = "inventory_quick_slots";
         public const string UpgradeIdCleaningTool = "cleaning_tool";
         public const string UpgradeIdWeldingTool = "welding_tool";

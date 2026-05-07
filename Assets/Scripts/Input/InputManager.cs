@@ -1,6 +1,8 @@
 ﻿using UnityEngine;
 using UnityEngine.InputSystem;
 
+using Game.Core;
+
 namespace Game.Input
 {
     /// <summary>
@@ -21,6 +23,7 @@ namespace Game.Input
     {
         private static InputManager _instance;
         private static bool _hasLoggedFallbackInstanceLookup;
+        private static bool _hasValidatedResourcePaths;
         public static InputManager Instance
         {
             get
@@ -94,14 +97,32 @@ namespace Game.Input
 
             if (_inputActionAsset == null)
             {
-                _inputActionAsset = Resources.Load<InputActionAsset>("InputSystem_Actions");
+                _inputActionAsset = Resources.Load<InputActionAsset>(ResourcePaths.InputActions);
                 if (_inputActionAsset == null)
                 {
-                    _inputActionAsset = UnityEngine.Resources.Load<InputActionAsset>("InputSystem_Actions");
+                    _inputActionAsset = UnityEngine.Resources.Load<InputActionAsset>(ResourcePaths.InputActions);
                 }
             }
 
+            ValidateConfiguredResourcesOnce();
             InitializeInputActions();
+        }
+
+        [System.Diagnostics.Conditional("UNITY_EDITOR")]
+        [System.Diagnostics.Conditional("DEVELOPMENT_BUILD")]
+        private static void ValidateConfiguredResourcesOnce()
+        {
+            if (_hasValidatedResourcePaths)
+            {
+                return;
+            }
+
+            _hasValidatedResourcePaths = true;
+            if (Resources.Load<InputActionAsset>(ResourcePaths.InputActions) == null)
+            {
+                Debug.LogWarning(
+                    $"[InputManager] Missing input action asset at Resources path '{ResourcePaths.InputActions}'.");
+            }
         }
 
         private void OnEnable()

@@ -29,14 +29,14 @@ namespace Game.Core
 
         public bool TryResolveStateFromSceneName(string activeSceneName, out GameState state)
         {
-            if (string.Equals(activeSceneName, "Menu", StringComparison.Ordinal))
+            if (string.Equals(activeSceneName, SceneIds.Menu, StringComparison.Ordinal))
             {
                 state = GameState.Menu;
                 return true;
             }
 
-            if (string.Equals(activeSceneName, "HomeScene", StringComparison.Ordinal)
-                || string.Equals(activeSceneName, "GameplayScene", StringComparison.Ordinal))
+            if (string.Equals(activeSceneName, SceneIds.Home, StringComparison.Ordinal)
+                || string.Equals(activeSceneName, SceneIds.Gameplay, StringComparison.Ordinal))
             {
                 state = GameState.FreePlay;
                 return true;

@@ -3,6 +3,7 @@ using Unity.Netcode.Transports.UTP;
 using UnityEngine;
 using UnityEngine.SceneManagement;
 using System.Reflection;
+using Game.Core;
 
 namespace Game.Networking
 {
@@ -12,9 +13,10 @@ namespace Game.Networking
     /// </summary>
     public class NetworkSessionBootstrap : MonoBehaviour
     {
-        private const string SandboxSceneName = "NetworkSandbox";
-        private const string InitialNetworkSceneName = "HomeScene";
+        private const string SandboxSceneName = SceneIds.NetworkSandbox;
+        private const string InitialNetworkSceneName = SceneIds.Home;
         private static NetworkSessionBootstrap _instance;
+        private static bool _hasLoggedSandboxAudioListenerIntent;
 
         [Header("Sandbox Networking")]
         [SerializeField] private string _address = "127.0.0.1";
@@ -66,6 +68,7 @@ namespace Game.Networking
             ApplyRuntimeConnectionOverrides();
             _addressField = string.IsNullOrWhiteSpace(_address) ? "127.0.0.1" : _address.Trim();
             EnsureNetworkManagerSetup();
+            LogSandboxAudioListenerIntentOnce();
         }
 
         private void Update()
@@ -471,6 +474,32 @@ namespace Game.Networking
             Scene activeScene = SceneManager.GetActiveScene();
             return activeScene.IsValid()
                    && string.Equals(activeScene.name, SandboxSceneName, System.StringComparison.Ordinal);
+        }
+
+        private void LogSandboxAudioListenerIntentOnce()
+        {
+            if (_hasLoggedSandboxAudioListenerIntent || !IsSandboxSceneActive())
+            {
+                return;
+            }
+
+            Camera bootstrapCamera = Camera.main;
+            if (bootstrapCamera == null)
+            {
+                return;
+            }
+
+            AudioListener bootstrapListener = bootstrapCamera.GetComponent<AudioListener>();
+            if (bootstrapListener == null || bootstrapListener.enabled)
+            {
+                return;
+            }
+
+            _hasLoggedSandboxAudioListenerIntent = true;
+            Debug.Log(
+                "[NetworkSessionBootstrap] NetworkSandbox bootstrap camera AudioListener is intentionally disabled. " +
+                "Player-owned listeners are enabled by NetworkPlayerOwnershipGate after spawn to avoid duplicate-listener conflicts.",
+                bootstrapCamera);
         }
     }
 }

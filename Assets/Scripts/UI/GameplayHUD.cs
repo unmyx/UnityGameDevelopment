@@ -6,6 +6,8 @@ using Game.Interaction;
 using Game.Minigames;
 using Game.Player;
 using TMPro;
+using System.Collections.Generic;
+using UnityEngine.SceneManagement;
 
 namespace Game.UI
 {
@@ -15,6 +17,7 @@ namespace Game.UI
     /// </summary>
     public class GameplayHUD : MonoBehaviour
     {
+        private static readonly HashSet<string> LoggedFallbackValidationWarnings = new HashSet<string>();
         private const string LocalPlayerId = PlayerContextRegistry.DefaultLocalPlayerId;
         [Header("Currency Display")]
         [SerializeField]
@@ -713,12 +716,56 @@ namespace Game.UI
                 && PlayerContextLocator.TryGetInteractionSystem(out InteractionSystem fallbackInteractionSystem)
                 && fallbackInteractionSystem != null)
             {
+                ValidateInteractionSystemFallbackCandidates();
+                ValidateInteractionSystemFallbackWindow();
                 _interactionSystem = fallbackInteractionSystem;
                 if (!_hasLoggedCompatibilityInteractionFallback)
                 {
                     _hasLoggedCompatibilityInteractionFallback = true;
                     Debug.LogWarning("[GameplayHUD] Using compatibility fallback to resolve InteractionSystem.", this);
                 }
+            }
+        }
+
+        [System.Diagnostics.Conditional("UNITY_EDITOR")]
+        [System.Diagnostics.Conditional("DEVELOPMENT_BUILD")]
+        private void ValidateInteractionSystemFallbackWindow()
+        {
+            if (PlayerContextLocator.IsCompatibilityFallbackAllowed())
+            {
+                return;
+            }
+
+            string sceneName = SceneManager.GetActiveScene().name;
+            string key = $"HUD_INTERACTION_WINDOW|{sceneName}";
+            if (!LoggedFallbackValidationWarnings.Add(key))
+            {
+                return;
+            }
+
+            Debug.LogWarning(
+                $"[FallbackValidation][HUD_INTERACTION_WINDOW] scene='{sceneName}' window='{FallbackGuardrails.ToToken(FallbackWindow.Stable)}' expected='bootstrap|recovery' risk='stable_hud_fallback'",
+                this);
+        }
+
+        [System.Diagnostics.Conditional("UNITY_EDITOR")]
+        [System.Diagnostics.Conditional("DEVELOPMENT_BUILD")]
+        private void ValidateInteractionSystemFallbackCandidates()
+        {
+            InteractionSystem[] candidates = FindObjectsByType<InteractionSystem>(FindObjectsInactive.Include);
+            int count = candidates != null ? candidates.Length : 0;
+            string sceneName = SceneManager.GetActiveScene().name;
+            string key = $"HUD_INTERACTION_CANDIDATES|{sceneName}|{count}";
+            if (!LoggedFallbackValidationWarnings.Add(key))
+            {
+                return;
+            }
+
+            if (count == 0 || count > 1)
+            {
+                Debug.LogWarning(
+                    $"[FallbackValidation][HUD_INTERACTION_CANDIDATES] scene='{sceneName}' candidates='{count}' risk='wrong_interaction_system_bind'",
+                    this);
             }
         }
 

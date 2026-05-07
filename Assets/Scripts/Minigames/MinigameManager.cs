@@ -12,6 +12,10 @@ namespace Game.Minigames
     /// </summary>
     public class MinigameManager : MonoBehaviour
     {
+        private static readonly HashSet<string> LoggedFallbackValidationWarnings = new HashSet<string>();
+        private const string HomeSceneName = "HomeScene";
+        private const string GameplaySceneName = "GameplayScene";
+
         [Header("Minigame Canvases")]
         [SerializeField] private Canvas _cleaningCanvas;
         [SerializeField] private Canvas _weldingCanvas;
@@ -44,6 +48,8 @@ namespace Game.Minigames
         private int _managerLifetimeScope;
         private int _lastTerminalFlowFrame = -1;
         private string _lastTerminalFlowType;
+        private bool _hasLoggedHomeSceneOptionalCanvasInfo;
+        private bool _hasLoggedGameplaySceneCanvasWarning;
 
         private void Awake()
         {
@@ -57,6 +63,7 @@ namespace Game.Minigames
             _managerLifetimeScope = ++_managerLifetimeSequence;
 
             EnsureMinigameCanvasesHidden();
+            LogSceneCanvasBindingExpectations();
             SceneManager.sceneLoaded += OnSceneLoaded;
         }
 
@@ -95,7 +102,11 @@ namespace Game.Minigames
 
         public IMinigame StartMinigame<T>(MinigameData data) where T : MonoBehaviour, IMinigame
         {
-            string ownerPlayerId = ResolveOwnerPlayerId(data != null ? data.ownerPlayerId : null);
+            string ownerPlayerId = ResolveOwnerPlayerId(
+                data != null ? data.ownerPlayerId : null,
+                "StartMinigame<T>(data)",
+                data != null ? data.minigameId : typeof(T).Name,
+                allowNetworkDefaultOwnerFallback: false);
             return StartMinigame<T>(data, ownerPlayerId);
         }
 
@@ -111,7 +122,12 @@ namespace Game.Minigames
                 return null;
             }
 
-            ownerPlayerId = ResolveOwnerPlayerId(ownerPlayerId);
+            ownerPlayerId = ResolveOwnerPlayerId(ownerPlayerId, "StartMinigame<T>(data, owner)", data.minigameId, allowNetworkDefaultOwnerFallback: false);
+            if (string.IsNullOrWhiteSpace(ownerPlayerId))
+            {
+                return null;
+            }
+
             data.ownerPlayerId = ownerPlayerId;
 
             if (!ValidateCanvasRequirements(typeof(T), data, ownerPlayerId))
@@ -154,7 +170,11 @@ namespace Game.Minigames
 
         public IMinigame StartMinigameWithObject(IMinigame minigame, MinigameData data)
         {
-            string ownerPlayerId = ResolveOwnerPlayerId(data != null ? data.ownerPlayerId : null);
+            string ownerPlayerId = ResolveOwnerPlayerId(
+                data != null ? data.ownerPlayerId : null,
+                "StartMinigameWithObject(minigame, data)",
+                data != null ? data.minigameId : (minigame != null ? minigame.GetType().Name : "<null>"),
+                allowNetworkDefaultOwnerFallback: false);
             return StartMinigameWithObject(minigame, data, ownerPlayerId);
         }
 
@@ -175,7 +195,12 @@ namespace Game.Minigames
                 return null;
             }
 
-            ownerPlayerId = ResolveOwnerPlayerId(ownerPlayerId);
+            ownerPlayerId = ResolveOwnerPlayerId(ownerPlayerId, "StartMinigameWithObject(minigame, data, owner)", data.minigameId, allowNetworkDefaultOwnerFallback: false);
+            if (string.IsNullOrWhiteSpace(ownerPlayerId))
+            {
+                return null;
+            }
+
             data.ownerPlayerId = ownerPlayerId;
 
             if (!ValidateCanvasRequirements(minigame.GetType(), data, ownerPlayerId))
@@ -319,7 +344,7 @@ namespace Game.Minigames
                 return false;
             }
 
-            string normalizedOwner = ResolveOwnerPlayerId(ownerPlayerId);
+            string normalizedOwner = ResolveOwnerPlayerId(ownerPlayerId, "TryCancelMinigameForOwner", _activeMinigame?.GetMinigameId());
             return string.Equals(normalizedOwner, _activeOwnerPlayerId, System.StringComparison.Ordinal);
         }
 
@@ -378,6 +403,7 @@ namespace Game.Minigames
         private void OnSceneLoaded(Scene scene, LoadSceneMode mode)
         {
             EnsureMinigameCanvasesHidden();
+            LogSceneCanvasBindingExpectations();
         }
 
         private void EnsureMinigameCanvasesHidden()
@@ -547,6 +573,59 @@ namespace Game.Minigames
             return string.Equals(data?.minigameId, DrillScrewMinigameId, System.StringComparison.Ordinal);
         }
 
+        private void LogSceneCanvasBindingExpectations()
+        {
+            string sceneName = SceneManager.GetActiveScene().name;
+            bool hasAnyGameplayCanvas = _cleaningCanvas != null
+                || _weldingCanvas != null
+                || _measureCutCanvas != null
+                || _pipePaintCanvas != null
+                || _drillScrewCanvas != null;
+
+            if (string.Equals(sceneName, HomeSceneName, System.StringComparison.Ordinal))
+            {
+                if (_hasLoggedHomeSceneOptionalCanvasInfo || hasAnyGameplayCanvas)
+                {
+                    return;
+                }
+
+                _hasLoggedHomeSceneOptionalCanvasInfo = true;
+                Debug.Log(
+                    "[MinigameManager] HomeScene has no gameplay minigame canvases assigned. " +
+                    "This is expected for home/staging flow.",
+                    this);
+                return;
+            }
+
+            if (!string.Equals(sceneName, GameplaySceneName, System.StringComparison.Ordinal))
+            {
+                return;
+            }
+
+            if (_hasLoggedGameplaySceneCanvasWarning)
+            {
+                return;
+            }
+
+            List<string> missing = new List<string>();
+            if (_cleaningCanvas == null) missing.Add("CleaningCanvas");
+            if (_weldingCanvas == null) missing.Add("WeldingCanvas");
+            if (_measureCutCanvas == null) missing.Add("MeasureCutCanvas");
+            if (_pipePaintCanvas == null) missing.Add("PipePaintCanvas");
+            if (_drillScrewCanvas == null) missing.Add("DrillScrewCanvas");
+
+            if (missing.Count == 0)
+            {
+                return;
+            }
+
+            _hasLoggedGameplaySceneCanvasWarning = true;
+            Debug.LogWarning(
+                $"[MinigameManager] GameplayScene is missing minigame canvas bindings: {string.Join(", ", missing)}. " +
+                "Minigames requiring these canvases may fail to start.",
+                this);
+        }
+
         private void WarnIfDuplicateTerminalFlow(string incomingFlowType, MinigameResult result)
         {
             if (_lastTerminalFlowFrame == Time.frameCount)
@@ -558,11 +637,52 @@ namespace Game.Minigames
             }
         }
 
-        private static string ResolveOwnerPlayerId(string ownerPlayerId)
+        private static string ResolveOwnerPlayerId(
+            string ownerPlayerId,
+            string callsite,
+            string minigameId,
+            bool allowNetworkDefaultOwnerFallback = true)
         {
-            return string.IsNullOrWhiteSpace(ownerPlayerId)
-                ? PlayerContextRegistry.DefaultLocalPlayerId
-                : ownerPlayerId.Trim();
+            if (string.IsNullOrWhiteSpace(ownerPlayerId))
+            {
+                ValidateOwnerDefaultFallback(callsite, minigameId);
+                if (!allowNetworkDefaultOwnerFallback && IsActiveNetworkSession())
+                {
+                    return string.Empty;
+                }
+
+                return PlayerContextRegistry.DefaultLocalPlayerId;
+            }
+
+            return ownerPlayerId.Trim();
+        }
+
+        private static bool IsActiveNetworkSession()
+        {
+            Unity.Netcode.NetworkManager manager = Unity.Netcode.NetworkManager.Singleton;
+            return manager != null && manager.IsListening;
+        }
+
+        [System.Diagnostics.Conditional("UNITY_EDITOR")]
+        [System.Diagnostics.Conditional("DEVELOPMENT_BUILD")]
+        private static void ValidateOwnerDefaultFallback(string callsite, string minigameId)
+        {
+            Unity.Netcode.NetworkManager manager = Unity.Netcode.NetworkManager.Singleton;
+            if (manager == null || !manager.IsListening)
+            {
+                return;
+            }
+
+            string sceneName = SceneManager.GetActiveScene().name;
+            string resolvedMinigameId = string.IsNullOrWhiteSpace(minigameId) ? "<unknown>" : minigameId.Trim();
+            string key = $"MM_OWNER_DEFAULT|{sceneName}|{callsite}|{resolvedMinigameId}";
+            if (!LoggedFallbackValidationWarnings.Add(key))
+            {
+                return;
+            }
+
+            Debug.LogWarning(
+                $"[FallbackValidation][MM_OWNER_DEFAULT] scene='{sceneName}' callsite='{callsite}' minigameId='{resolvedMinigameId}' netMode='{(manager.IsServer ? (manager.IsClient ? "host" : "server") : "client")}' risk='owner_drift_default_local'");
         }
 
         private static void BeginLocalPresentationForOwner(string minigameId, string ownerPlayerId)
