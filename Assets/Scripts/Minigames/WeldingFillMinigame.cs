@@ -14,13 +14,15 @@ namespace Game.Minigames
         private const float RequiredCoverage01 = 1f;
         private const float DefaultTimeLimitSeconds = 30f;
         private const int DefaultTimeoutCurrencyPenalty = 10;
+        private static readonly int BaseColorPropertyId = Shader.PropertyToID("_BaseColor");
+        private static readonly int ColorPropertyId = Shader.PropertyToID("_Color");
 
         private sealed class WeldAnchorState
         {
             public Transform Anchor;
             public float Coverage01;
             public bool IsComplete;
-            public bool[] CoveredSeamSamples;
+            public WeldingCoverageMask CoverageMask;
             public float LastPaintSeamT;
             public float StationaryDuration;
             public Transform MarkerVisualRoot;
@@ -33,6 +35,7 @@ namespace Game.Minigames
         private readonly WeldInputHandler _inputHandler = new WeldInputHandler();
         private readonly List<WeldAnchorState> _activeWorldAnchors = new List<WeldAnchorState>(8);
         private readonly List<Transform> _candidateWorldAnchors = new List<Transform>(16);
+        private readonly MaterialPropertyBlock _markerPropertyBlock = new MaterialPropertyBlock();
 
         [Header("Canvas References")]
         [SerializeField] private Canvas _minigameCanvas;
@@ -104,7 +107,9 @@ namespace Game.Minigames
         private Coroutine _cameraTransitionRoutine;
         private readonly MinigameToolSession _toolSession = new MinigameToolSession();
         private readonly WeldingRadiusController _radiusController = new WeldingRadiusController();
+        private readonly WeldingResultGate _resultGate = new WeldingResultGate();
         private WeldingToolDefinition _toolDefinition;
+        private int _lastDisplayedTimerSeconds = int.MinValue;
 
         public ToolType ActiveTool => _toolSession.ActiveTool;
 
@@ -155,6 +160,8 @@ namespace Game.Minigames
             _remainingTimeSeconds = _timeLimitSeconds;
             _hasProcessedTimeoutFailure = false;
             _lastOverallCoverage = -1f;
+            _lastDisplayedTimerSeconds = int.MinValue;
+            _resultGate.Reset();
             ResolveGameplayViewCamera();
 
             if (_worldWeldAnchorsRoot == null)
@@ -226,6 +233,7 @@ namespace Game.Minigames
             _remainingTimeSeconds = _timeLimitSeconds;
             _hasProcessedTimeoutFailure = false;
             _lastOverallCoverage = -1f;
+            _lastDisplayedTimerSeconds = int.MinValue;
 
             if (!InitializeWorldAnchorTargets())
             {
@@ -298,8 +306,18 @@ namespace Game.Minigames
             _pendingResult = MinigameResult.None;
             _setupFailureReason = string.Empty;
             _radiusController.EndSession();
+            _resultGate.Reset();
             _toolDefinition = default;
+            _lastDisplayedTimerSeconds = int.MinValue;
             _toolSession.Clear();
+        }
+
+        private void OnDisable()
+        {
+            if (IsActive())
+            {
+                SetResult(MinigameResult.Fail);
+            }
         }
 
         private void FailSetup(string reason)
@@ -360,7 +378,7 @@ namespace Game.Minigames
                     Anchor = anchor,
                     Coverage01 = 0f,
                     IsComplete = false,
-                    CoveredSeamSamples = new bool[Mathf.Max(24, _worldSeamSampleCount)],
+                    CoverageMask = new WeldingCoverageMask(WeldingMarkerBudget.ClampSampleCount(_worldSeamSampleCount)),
                     LastPaintSeamT = -1f,
                     StationaryDuration = 0f,
                     MarkerVisualRoot = null,
@@ -436,7 +454,7 @@ namespace Game.Minigames
             seamBase.transform.localRotation = Quaternion.identity;
             seamBase.transform.localScale = new Vector3(Mathf.Max(0.08f, _worldSeamLength), 0.006f, Mathf.Max(0.012f, _worldSeamVisualWidth));
 
-            int seamSamples = Mathf.Max(24, _worldSeamSampleCount);
+            int seamSamples = WeldingMarkerBudget.ClampSampleCount(_worldSeamSampleCount);
             Renderer[] weldedSampleRenderers = new Renderer[seamSamples];
             float halfLength = Mathf.Max(0.08f, _worldSeamLength) * 0.5f;
             for (int i = 0; i < seamSamples; i++)
@@ -496,11 +514,7 @@ namespace Game.Minigames
 
             if (state.MarkerSeamRenderer != null)
             {
-                Material seamMat = state.MarkerSeamRenderer.material;
-                if (seamMat != null)
-                {
-                    seamMat.color = seamColor;
-                }
+                SetMarkerRendererColor(state.MarkerSeamRenderer, seamColor);
             }
 
             Renderer[] sampleRenderers = state.MarkerWeldedSampleRenderers;
@@ -516,12 +530,21 @@ namespace Game.Minigames
                     continue;
                 }
 
-                Material fillMat = sampleRenderers[i].material;
-                if (fillMat != null)
-                {
-                    fillMat.color = sampleColor;
-                }
+                SetMarkerRendererColor(sampleRenderers[i], sampleColor);
             }
+        }
+
+        private void SetMarkerRendererColor(Renderer targetRenderer, Color color)
+        {
+            if (targetRenderer == null)
+            {
+                return;
+            }
+
+            _markerPropertyBlock.Clear();
+            _markerPropertyBlock.SetColor(BaseColorPropertyId, color);
+            _markerPropertyBlock.SetColor(ColorPropertyId, color);
+            targetRenderer.SetPropertyBlock(_markerPropertyBlock);
         }
 
         private void UpdateWorldAnchorTargets()
@@ -557,7 +580,7 @@ namespace Game.Minigames
 
         private void PaintWorldAnchorSeam(WeldAnchorState anchor, float seamT)
         {
-            if (anchor == null || anchor.CoveredSeamSamples == null || anchor.CoveredSeamSamples.Length == 0)
+            if (anchor == null || anchor.CoverageMask == null || anchor.CoverageMask.SampleCount == 0)
             {
                 return;
             }
@@ -596,14 +619,24 @@ namespace Game.Minigames
             float effectiveEfficiency = Mathf.Clamp01(travelEfficiency * stallMultiplier);
 
             float baseRadiusT = GetWorldTraceRadius01();
-            float effectiveRadiusT = Mathf.Lerp(baseRadiusT * 0.35f, baseRadiusT, effectiveEfficiency);
+            float coverageMultiplier = Mathf.Clamp(_worldAnchorWeldRate, 0.25f, 2f);
+            float upgradedRadiusT = Mathf.Clamp(
+                baseRadiusT * coverageMultiplier,
+                _toolDefinition.MinimumRadius,
+                _toolDefinition.MaximumRadius);
+            float effectiveRadiusT = Mathf.Lerp(upgradedRadiusT * 0.35f, upgradedRadiusT, effectiveEfficiency);
 
             if (effectiveEfficiency > 0.001f && effectiveRadiusT > 0.0005f)
             {
                 float fastFactor = Mathf.InverseLerp(maxEfficientSpeed, gapSpeed, travelSpeed);
                 float spacingMultiplier = Mathf.Lerp(0.6f, Mathf.Max(0.7f, _worldFastGapSpacingMultiplier), fastFactor);
                 float stampSpacingT = Mathf.Max(0.001f, effectiveRadiusT * spacingMultiplier);
-                StampSeamCoverage(anchor.CoveredSeamSamples, previousT, clampedT, effectiveRadiusT, stampSpacingT);
+                anchor.CoverageMask.StampSegment(
+                    true,
+                    previousT,
+                    clampedT,
+                    effectiveRadiusT,
+                    stampSpacingT);
             }
 
             anchor.LastPaintSeamT = clampedT;
@@ -612,61 +645,12 @@ namespace Game.Minigames
 
         private void UpdateAnchorCoverageFromSamples(WeldAnchorState anchor)
         {
-            if (anchor == null || anchor.CoveredSeamSamples == null || anchor.CoveredSeamSamples.Length == 0)
+            if (anchor == null || anchor.CoverageMask == null)
             {
                 return;
             }
 
-            int sampleCount = anchor.CoveredSeamSamples.Length;
-            int coveredCount = 0;
-            for (int i = 0; i < sampleCount; i++)
-            {
-                if (anchor.CoveredSeamSamples[i])
-                {
-                    coveredCount++;
-                }
-            }
-
-            float targetCoverage = coveredCount / (float)sampleCount;
-            anchor.Coverage01 = Mathf.MoveTowards(anchor.Coverage01, targetCoverage, _worldAnchorWeldRate * Time.deltaTime);
-        }
-
-        private static void StampSeamCoverage(bool[] coveredSamples, float startT, float endT, float radiusT, float spacingT)
-        {
-            if (coveredSamples == null || coveredSamples.Length == 0)
-            {
-                return;
-            }
-
-            float clampedStart = Mathf.Clamp01(startT);
-            float clampedEnd = Mathf.Clamp01(endT);
-            float travelDistance = Mathf.Abs(clampedEnd - clampedStart);
-            int stampCount = Mathf.Max(1, Mathf.CeilToInt(travelDistance / Mathf.Max(0.0001f, spacingT)));
-
-            for (int stampIndex = 0; stampIndex <= stampCount; stampIndex++)
-            {
-                float u = stampCount > 0 ? stampIndex / (float)stampCount : 0f;
-                float stampCenterT = Mathf.Lerp(clampedStart, clampedEnd, u);
-                MarkSamplesWithinRadius(coveredSamples, stampCenterT, radiusT);
-            }
-        }
-
-        private static void MarkSamplesWithinRadius(bool[] coveredSamples, float centerT, float radiusT)
-        {
-            if (coveredSamples == null || coveredSamples.Length == 0)
-            {
-                return;
-            }
-
-            int sampleCount = coveredSamples.Length;
-            for (int i = 0; i < sampleCount; i++)
-            {
-                float sampleT = sampleCount > 1 ? i / (float)(sampleCount - 1) : 0f;
-                if (Mathf.Abs(sampleT - centerT) <= radiusT)
-                {
-                    coveredSamples[i] = true;
-                }
-            }
+            anchor.Coverage01 = anchor.CoverageMask.Progress01;
         }
 
         private float GetWorldTraceRadius01()
@@ -718,7 +702,7 @@ namespace Game.Minigames
                 SetWorldAnchorMarkerColor(anchor, seamColor, _worldAnchorCompleteColor);
 
                 Renderer[] sampleRenderers = anchor.MarkerWeldedSampleRenderers;
-                bool[] coveredSamples = anchor.CoveredSeamSamples;
+                WeldingCoverageMask coverageMask = anchor.CoverageMask;
                 if (sampleRenderers != null)
                 {
                     for (int sampleIndex = 0; sampleIndex < sampleRenderers.Length; sampleIndex++)
@@ -729,20 +713,18 @@ namespace Game.Minigames
                             continue;
                         }
 
-                        bool covered = coveredSamples != null && sampleIndex < coveredSamples.Length && coveredSamples[sampleIndex];
+                        bool covered = coverageMask != null && coverageMask.IsCovered(sampleIndex);
                         sampleRenderer.gameObject.SetActive(covered);
                         if (!covered)
                         {
                             continue;
                         }
 
-                        Material sampleMaterial = sampleRenderer.material;
-                        if (sampleMaterial != null)
-                        {
-                            sampleMaterial.color = anchor.IsComplete
+                        SetMarkerRendererColor(
+                            sampleRenderer,
+                            anchor.IsComplete
                                 ? Color.Lerp(_worldAnchorCompleteColor, Color.white, 0.3f)
-                                : Color.Lerp(_worldAnchorCompleteColor, Color.white, 0.12f);
-                        }
+                                : Color.Lerp(_worldAnchorCompleteColor, Color.white, 0.12f));
                     }
                 }
 
@@ -774,13 +756,11 @@ namespace Game.Minigames
 
                 if (anchor.MarkerHotspotRenderer != null && anchor.MarkerHotspotTransform != null && anchor.MarkerHotspotTransform.gameObject.activeSelf)
                 {
-                    Material hotspotMaterial = anchor.MarkerHotspotRenderer.material;
-                    if (hotspotMaterial != null)
-                    {
-                        hotspotMaterial.color = paintHeld
+                    SetMarkerRendererColor(
+                        anchor.MarkerHotspotRenderer,
+                        paintHeld
                             ? Color.Lerp(_worldAnchorActiveColor, Color.white, 0.35f)
-                            : Color.Lerp(_worldAnchorActiveColor, Color.white, 0.1f);
-                    }
+                            : Color.Lerp(_worldAnchorActiveColor, Color.white, 0.1f));
                 }
             }
         }
@@ -978,15 +958,28 @@ namespace Game.Minigames
                 {
                     Destroy(anchor.MarkerVisualRoot.gameObject);
                 }
+
+                anchor?.CoverageMask?.Clear();
             }
 
             _activeWorldAnchors.Clear();
             _candidateWorldAnchors.Clear();
+            _lastOverallCoverage = -1f;
+
+            if (_coverageFillImage != null)
+            {
+                _coverageFillImage.fillAmount = 0f;
+            }
+
+            if (_coverageText != null)
+            {
+                _coverageText.text = string.Empty;
+            }
         }
 
         private void RequestFinish(MinigameResult result)
         {
-            if (result == MinigameResult.None || _isFinishing)
+            if (!_resultGate.TrySet(result))
             {
                 return;
             }
@@ -1636,6 +1629,12 @@ namespace Game.Minigames
             _timerText.gameObject.SetActive(true);
 
             int secondsLeft = Mathf.CeilToInt(_remainingTimeSeconds);
+            if (secondsLeft == _lastDisplayedTimerSeconds)
+            {
+                return;
+            }
+
+            _lastDisplayedTimerSeconds = secondsLeft;
             _timerText.text = $"Time: {secondsLeft}s";
             _timerText.color = _remainingTimeSeconds <= 5f ? Color.red : Color.white;
         }

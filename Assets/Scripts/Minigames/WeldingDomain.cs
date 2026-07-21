@@ -1,3 +1,4 @@
+using System.Collections.Generic;
 using Game.Inventory;
 using UnityEngine;
 
@@ -130,6 +131,163 @@ namespace Game.Minigames
             CurrentRadius = 0f;
             IsSessionActive = false;
             _lastInputFrame = int.MinValue;
+        }
+    }
+
+    public sealed class WeldingCoverageMask
+    {
+        private readonly bool[] _coveredSamples;
+
+        public int SampleCount => _coveredSamples.Length;
+        public int CoveredCount { get; private set; }
+        public float Progress01 => SampleCount <= 0
+            ? 0f
+            : Mathf.Clamp01(CoveredCount / (float)SampleCount);
+        public bool IsComplete => SampleCount > 0 && CoveredCount == SampleCount;
+
+        public WeldingCoverageMask(int sampleCount)
+        {
+            _coveredSamples = sampleCount > 0 ? new bool[sampleCount] : System.Array.Empty<bool>();
+        }
+
+        public bool IsCovered(int sampleIndex)
+        {
+            return sampleIndex >= 0
+                && sampleIndex < _coveredSamples.Length
+                && _coveredSamples[sampleIndex];
+        }
+
+        public int StampSegment(
+            bool isInsideActiveZone,
+            float startT,
+            float endT,
+            float radiusT,
+            float spacingT)
+        {
+            if (!isInsideActiveZone
+                || SampleCount == 0
+                || !float.IsFinite(startT)
+                || !float.IsFinite(endT)
+                || !float.IsFinite(radiusT)
+                || radiusT <= 0f)
+            {
+                return 0;
+            }
+
+            float clampedStart = Mathf.Clamp01(startT);
+            float clampedEnd = Mathf.Clamp01(endT);
+            float travelDistance = Mathf.Abs(clampedEnd - clampedStart);
+            float safeSpacing = float.IsFinite(spacingT) && spacingT > 0f ? spacingT : radiusT;
+            int requestedStampCount = Mathf.Max(1, Mathf.CeilToInt(travelDistance / Mathf.Max(0.0001f, safeSpacing)));
+            int stampCount = Mathf.Min(requestedStampCount, Mathf.Max(1, SampleCount * 2));
+            int coveredBefore = CoveredCount;
+
+            for (int stampIndex = 0; stampIndex <= stampCount; stampIndex++)
+            {
+                float u = stampCount > 0 ? stampIndex / (float)stampCount : 0f;
+                MarkSamplesWithinRadius(Mathf.Lerp(clampedStart, clampedEnd, u), radiusT);
+            }
+
+            return CoveredCount - coveredBefore;
+        }
+
+        public void Clear()
+        {
+            System.Array.Clear(_coveredSamples, 0, _coveredSamples.Length);
+            CoveredCount = 0;
+        }
+
+        private void MarkSamplesWithinRadius(float centerT, float radiusT)
+        {
+            for (int i = 0; i < _coveredSamples.Length; i++)
+            {
+                if (_coveredSamples[i])
+                {
+                    continue;
+                }
+
+                float sampleT = _coveredSamples.Length > 1 ? i / (float)(_coveredSamples.Length - 1) : 0f;
+                if (Mathf.Abs(sampleT - centerT) <= radiusT)
+                {
+                    _coveredSamples[i] = true;
+                    CoveredCount++;
+                }
+            }
+        }
+    }
+
+    public static class WeldingProgressMath
+    {
+        public static float CalculateOverallProgress(IReadOnlyList<WeldingCoverageMask> zones)
+        {
+            if (zones == null || zones.Count == 0)
+            {
+                return 0f;
+            }
+
+            float total = 0f;
+            for (int i = 0; i < zones.Count; i++)
+            {
+                total += zones[i]?.Progress01 ?? 0f;
+            }
+
+            return Mathf.Clamp01(total / zones.Count);
+        }
+
+        public static bool AreAllZonesComplete(IReadOnlyList<WeldingCoverageMask> zones)
+        {
+            if (zones == null || zones.Count == 0)
+            {
+                return false;
+            }
+
+            for (int i = 0; i < zones.Count; i++)
+            {
+                if (zones[i] == null || !zones[i].IsComplete)
+                {
+                    return false;
+                }
+            }
+
+            return true;
+        }
+    }
+
+    public static class WeldingMarkerBudget
+    {
+        public const int MinimumSamplesPerZone = 24;
+        public const int MaximumSamplesPerZone = 64;
+
+        public static int ClampSampleCount(int requestedSamples)
+        {
+            return Mathf.Clamp(requestedSamples, MinimumSamplesPerZone, MaximumSamplesPerZone);
+        }
+
+        public static int CalculateVisualObjectLimit(int zoneCount, int requestedSamples)
+        {
+            int safeZoneCount = Mathf.Max(0, zoneCount);
+            return safeZoneCount * (ClampSampleCount(requestedSamples) + 3);
+        }
+    }
+
+    public sealed class WeldingResultGate
+    {
+        public MinigameResult Result { get; private set; } = MinigameResult.None;
+
+        public bool TrySet(MinigameResult result)
+        {
+            if (result == MinigameResult.None || Result != MinigameResult.None)
+            {
+                return false;
+            }
+
+            Result = result;
+            return true;
+        }
+
+        public void Reset()
+        {
+            Result = MinigameResult.None;
         }
     }
 }
