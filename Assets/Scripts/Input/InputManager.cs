@@ -63,12 +63,12 @@ namespace Game.Input
 
         private Vector2 _currentMoveInput;
         private Vector2 _currentLookInput;
-        private bool _jumpPressed;
         private bool _interactPressed;
         private bool _interactTriggeredThisFrame;
         private bool _sprintPressed;
         private bool _crouchPressed;
         private bool _pausePressed;
+        private readonly JumpPressLatch _jumpPressLatch = new JumpPressLatch();
 
         public delegate void OnMovementInputDelegate(Vector2 input);
         public delegate void OnLookInputDelegate(Vector2 input);
@@ -171,6 +171,7 @@ namespace Game.Input
         private void Update()
         {
             _interactTriggeredThisFrame = false;
+            _jumpPressLatch.ExpireBefore(Time.frameCount);
             for (int i = 0; i < _slotSelectTriggeredThisFrame.Length; i++)
             {
                 _slotSelectTriggeredThisFrame[i] = false;
@@ -184,11 +185,6 @@ namespace Game.Input
             if (_lookAction != null)
             {
                 _currentLookInput = _lookAction.ReadValue<Vector2>();
-            }
-
-            if (_jumpAction != null)
-            {
-                _jumpPressed = _jumpAction.IsPressed();
             }
 
             if (_interactAction != null)
@@ -332,6 +328,11 @@ namespace Game.Input
 
         private void HandleJumpPerformed(InputAction.CallbackContext context)
         {
+            if (!_jumpPressLatch.RegisterPress(Time.frameCount))
+            {
+                return;
+            }
+
             OnJump?.Invoke();
         }
 
@@ -375,7 +376,7 @@ namespace Game.Input
         {
             _currentMoveInput = Vector2.zero;
             _currentLookInput = Vector2.zero;
-            _jumpPressed = false;
+            _jumpPressLatch.Clear();
             _interactPressed = false;
             _interactTriggeredThisFrame = false;
             _sprintPressed = false;
@@ -399,7 +400,17 @@ namespace Game.Input
 
         public bool IsJumpPressed()
         {
-            return _jumpPressed;
+            return _jumpPressLatch.HasPendingPress(Time.frameCount);
+        }
+
+        public bool TryConsumeJumpPress()
+        {
+            return _jumpPressLatch.TryConsume(Time.frameCount);
+        }
+
+        public void DiscardPendingJumpPress()
+        {
+            _jumpPressLatch.Clear();
         }
 
         public bool IsInteractPressed()

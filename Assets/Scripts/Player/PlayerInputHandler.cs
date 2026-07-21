@@ -30,11 +30,13 @@ namespace Game.Player
 
         private void OnEnable()
         {
+            JumpPressed = false;
             PlayerContextRegistry.RegisterOrUpdate(this, LocalPlayerId);
         }
 
         private void OnDisable()
         {
+            JumpPressed = false;
             PlayerContextRegistry.Unregister(this, LocalPlayerId);
         }
 
@@ -49,7 +51,7 @@ namespace Game.Player
 
             if (PauseManager.TryGetInstance(out PauseManager pauseManager) && pauseManager.IsPaused)
             {
-                ResetInputs();
+                ResetInputs(discardPendingJump: true);
                 return;
             }
 
@@ -59,7 +61,7 @@ namespace Game.Player
                 return;
             }
 
-            ResetInputs();
+            ResetInputs(discardPendingJump: true);
         }
 
         private void PollInput()
@@ -73,13 +75,31 @@ namespace Game.Player
 
             MovementInput = inputManager.GetMovementInput();
             LookInput = inputManager.GetLookInput();
-            JumpPressed = inputManager.IsJumpPressed();
+            JumpPressed = inputManager.TryConsumeJumpPress();
             SprintHeld = inputManager.IsSprintPressed();
             CrouchPressed = inputManager.IsCrouchPressed();
         }
 
         public void ResetFrameInputs()
         {
+            JumpPressed = false;
+        }
+
+        public bool ConsumeJumpPress()
+        {
+            bool wasPressed = JumpPressed;
+            JumpPressed = false;
+            if (!wasPressed || !IsLocallyOwned())
+            {
+                return false;
+            }
+
+            if (PauseManager.TryGetInstance(out PauseManager pauseManager) && pauseManager.IsPaused)
+            {
+                return false;
+            }
+
+            return CanPollInput();
         }
 
         public Vector2 GetNormalizedMovement()
@@ -92,13 +112,22 @@ namespace Game.Player
             return MovementInput.magnitude > 0;
         }
 
-        private void ResetInputs()
+        private void ResetInputs(bool discardPendingJump = false)
         {
             MovementInput = Vector2.zero;
             LookInput = Vector2.zero;
             JumpPressed = false;
             SprintHeld = false;
             CrouchPressed = false;
+
+            if (discardPendingJump)
+            {
+                InputManager inputManager = InputManager.Instance;
+                if (inputManager != null)
+                {
+                    inputManager.DiscardPendingJumpPress();
+                }
+            }
         }
 
         private bool CanPollInput()

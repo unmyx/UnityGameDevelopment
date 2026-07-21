@@ -159,7 +159,7 @@ namespace Game.Player
                 _currentSpeed = 0;
             }
 
-            if (_inputHandler.JumpPressed && CanJump())
+            if (_inputHandler.ConsumeJumpPress() && CanJump())
             {
                 Jump();
             }
