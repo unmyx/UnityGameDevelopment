@@ -11,6 +11,12 @@ namespace Game.Core
     {
         private static readonly Dictionary<Type, Delegate> Subscribers = new Dictionary<Type, Delegate>();
 
+        [RuntimeInitializeOnLoadMethod(RuntimeInitializeLoadType.SubsystemRegistration)]
+        private static void ResetSubscribers()
+        {
+            Subscribers.Clear();
+        }
+
         public static void Subscribe<T>(Action<T> callback)
         {
             if (callback == null)
