@@ -1,6 +1,7 @@
 using Game.Inventory;
 using Game.Minigames;
 using NUnit.Framework;
+using UnityEngine;
 
 public class CleaningDomainTests
 {
@@ -98,5 +99,98 @@ public class CleaningDomainTests
         Assert.That(stain.CompletedPasses, Is.Zero);
         Assert.That(stain.Progress01, Is.Zero);
         Assert.That(stain.IsComplete, Is.False);
+    }
+
+    [TestCase(0)]
+    [TestCase(1)]
+    [TestCase(2)]
+    [TestCase(4)]
+    public void SurfaceCounts_OtherThanThreeAreRejected(int surfaceCount)
+    {
+        bool created = CleaningSpawnRules.TryCreateSurfaceStainCounts(
+            surfaceCount,
+            new System.Random(1234),
+            out int[] counts);
+
+        Assert.That(created, Is.False);
+        Assert.That(counts, Is.Empty);
+    }
+
+    [Test]
+    public void ThreeSurfaces_EachReceiveOneToThreeStains()
+    {
+        for (int seed = 0; seed < 100; seed++)
+        {
+            Assert.That(CleaningSpawnRules.TryCreateSurfaceStainCounts(
+                CleaningSpawnRules.RequiredSurfaceCount,
+                new System.Random(seed),
+                out int[] counts), Is.True);
+            Assert.That(counts, Has.Length.EqualTo(3));
+            Assert.That(counts, Has.All.InRange(1, 3));
+            Assert.That(counts[0] + counts[1] + counts[2], Is.InRange(3, 9));
+        }
+    }
+
+    [Test]
+    public void SurfaceCounts_AreDeterministicForSeed()
+    {
+        CleaningSpawnRules.TryCreateSurfaceStainCounts(3, new System.Random(98765), out int[] first);
+        CleaningSpawnRules.TryCreateSurfaceStainCounts(3, new System.Random(98765), out int[] second);
+
+        Assert.That(second, Is.EqualTo(first));
+    }
+
+    [Test]
+    public void SurfaceCounts_AreIndependentlySampled()
+    {
+        bool observedDifferentCountsOnSameSession = false;
+        for (int seed = 0; seed < 100 && !observedDifferentCountsOnSameSession; seed++)
+        {
+            CleaningSpawnRules.TryCreateSurfaceStainCounts(3, new System.Random(seed), out int[] counts);
+            observedDifferentCountsOnSameSession = counts[0] != counts[1] || counts[1] != counts[2];
+        }
+
+        Assert.That(observedDifferentCountsOnSameSession, Is.True);
+    }
+
+    [Test]
+    public void PlacementBudget_RejectsPositionsInsideMinimumSpacing()
+    {
+        CleaningSurfacePlacementBudget placement = new CleaningSurfacePlacementBudget(2, 4, 1f);
+        Assert.That(placement.TryBeginAttempt(), Is.True);
+        Assert.That(placement.TryAccept(Vector3.zero), Is.True);
+        Assert.That(placement.TryBeginAttempt(), Is.True);
+
+        Assert.That(placement.TryAccept(new Vector3(0.5f, 0f, 0f)), Is.False);
+        Assert.That(placement.AcceptedPositions, Has.Count.EqualTo(1));
+        Assert.That(placement.IsComplete, Is.False);
+    }
+
+    [Test]
+    public void PlacementBudget_AcceptsPositionsAtMinimumSpacing()
+    {
+        CleaningSurfacePlacementBudget placement = new CleaningSurfacePlacementBudget(2, 4, 1f);
+        placement.TryBeginAttempt();
+        placement.TryAccept(Vector3.zero);
+        placement.TryBeginAttempt();
+
+        Assert.That(placement.TryAccept(Vector3.right), Is.True);
+        Assert.That(placement.IsComplete, Is.True);
+    }
+
+    [Test]
+    public void PlacementBudget_StopsAfterBoundedFailure()
+    {
+        CleaningSurfacePlacementBudget placement = new CleaningSurfacePlacementBudget(2, 3, 1f);
+
+        while (placement.TryBeginAttempt())
+        {
+            placement.TryAccept(Vector3.zero);
+        }
+
+        Assert.That(placement.Attempts, Is.EqualTo(3));
+        Assert.That(placement.AcceptedPositions, Has.Count.EqualTo(1));
+        Assert.That(placement.IsComplete, Is.False);
+        Assert.That(placement.CanAttempt, Is.False);
     }
 }

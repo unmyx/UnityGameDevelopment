@@ -88,20 +88,8 @@ namespace Game.Interaction
         private float _worldStainMarkerScale = 0.05f;
 
         [SerializeField]
-        [Min(1)]
-        private int _worldStainsPerSurface = 2;
-        
-        [SerializeField]
         [Min(0.01f)]
         private float _worldStainMinSpacing = 0.14f;
-        
-        [SerializeField]
-        [Min(-1)]
-        private int _requiredStainsMin = -1;
-        
-        [SerializeField]
-        [Min(-1)]
-        private int _requiredStainsMax = -1;
 
         private bool _awaitingNetworkStartApproval;
         private string _pendingNetworkStartTaskKey = string.Empty;
@@ -211,9 +199,6 @@ namespace Game.Interaction
             data.SetParameter("world_swipe_gain_per_pixel", _worldSwipeGainPerPixel * cleaningEffectivenessMultiplier * cleaningDayDifficultyMultiplier);
             data.SetParameter("world_stain_marker_scale", _worldStainMarkerScale);
             data.SetParameter("world_stain_min_spacing", _worldStainMinSpacing);
-            data.SetParameter("world_stains_per_surface", _worldStainsPerSurface);
-            data.SetParameter("required_stains_min", _requiredStainsMin);
-            data.SetParameter("required_stains_max", _requiredStainsMax);
             data.SetParameter("world_spawn_seed", UnityEngine.Random.Range(int.MinValue, int.MaxValue));
             data.SetParameter("cleaning_tool_effectiveness_multiplier", cleaningEffectivenessMultiplier);
             MinigameToolSnapshot.Set(data, _interactionToolSnapshot);

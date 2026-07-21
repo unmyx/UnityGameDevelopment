@@ -24,7 +24,6 @@ namespace Game.Minigames
             public bool IsCleaned;
         }
 
-        private const int DefaultStainsPerSurface = 2;
         private const int DefaultSpawnAttemptsPerStain = 14;
         private const float MinTopSurfaceDot = 0.65f;
         private const float StainSurfaceOffset = 0.006f;
@@ -54,7 +53,6 @@ namespace Game.Minigames
         [SerializeField] private Color _worldStainDirtyColor = new Color(0.46f, 0.27f, 0.12f, 0.97f);
         [SerializeField] private Color _worldStainHoverColor = new Color(0.94f, 0.67f, 0.29f, 1f);
         [SerializeField] private Color _worldStainCleanColor = new Color(0.51f, 0.30f, 0.16f, 0.1f);
-        [SerializeField] [Min(1)] private int _worldStainsPerSurface = DefaultStainsPerSurface;
         [SerializeField] [Min(0.01f)] private float _worldStainMinSpacing = 0.14f;
         [SerializeField] [Range(0.1f, 0.95f)] private float _worldStainMaxSurfaceCoverage = 0.78f;
         [SerializeField] [Range(0.05f, 0.9f)] private float _worldStainMinSurfaceCoverage = 0.30f;
@@ -63,8 +61,6 @@ namespace Game.Minigames
         private float _timeLimitSeconds = DefaultTimeLimitSeconds;
         private float _remainingTimeSeconds = DefaultTimeLimitSeconds;
         private int _timeoutCurrencyPenalty = DefaultTimeoutCurrencyPenalty;
-        private int _requiredStainsMin = -1;
-        private int _requiredStainsMax = -1;
         private int? _worldSpawnSeed;
         private string _cleaningToolLabel = "Water";
         private float _cleaningToolEffectivenessMultiplier = 1f;
@@ -318,10 +314,7 @@ namespace Game.Minigames
                 0.05f,
                 _worldStainMaxSurfaceCoverage);
             _worldStainEdgePadding = Mathf.Max(0f, GetParameterFloat("world_stain_edge_padding") ?? _worldStainEdgePadding);
-            _worldStainsPerSurface = Mathf.Max(1, GetParameterInt("world_stains_per_surface") ?? _worldStainsPerSurface);
             _freezePlayerMovementInWorldView = GetParameterBool("world_freeze_player") ?? _freezePlayerMovementInWorldView;
-            _requiredStainsMin = GetParameterInt("required_stains_min") ?? _requiredStainsMin;
-            _requiredStainsMax = GetParameterInt("required_stains_max") ?? _requiredStainsMax;
             _worldSpawnSeed = GetParameterInt("world_spawn_seed");
             _cleaningToolEffectivenessMultiplier =
                 Mathf.Max(0.01f, GetParameterFloat("cleaning_tool_effectiveness_multiplier") ?? _cleaningToolEffectivenessMultiplier);
@@ -357,8 +350,7 @@ namespace Game.Minigames
             Debug.Log(
                 $"[CleaningMinigame] Parameters loaded: TimeLimit={_timeLimitSeconds:0.0}s, " +
                 $"TimeoutPenalty={_timeoutCurrencyPenalty}, " +
-                $"RequiredPasses={CleaningToolRules.GetRequiredPasses(ActiveTool)}, " +
-                $"StainsPerSurface={_worldStainsPerSurface}");
+                $"RequiredPasses={CleaningToolRules.GetRequiredPasses(ActiveTool)}");
         }
 
         private bool ValidateWorldContract(bool logErrors)
@@ -397,9 +389,11 @@ namespace Game.Minigames
             if (_worldCleaningSurfaceRoot != null)
             {
                 CacheWorldSpawnSurfaces();
-                if (_worldSpawnSurfaces.Count <= 0)
+                if (!CleaningSpawnRules.HasRequiredSurfaceCount(_worldSpawnSurfaces.Count))
                 {
-                    failures.Add("CleaningSurfaces has zero active collidable surfaces");
+                    failures.Add(
+                        $"CleaningSurfaces requires exactly {CleaningSpawnRules.RequiredSurfaceCount} " +
+                        $"active collidable surfaces, found {_worldSpawnSurfaces.Count}");
                 }
             }
 
@@ -523,7 +517,7 @@ namespace Game.Minigames
             }
 
             CacheWorldSpawnSurfaces();
-            return _worldSpawnSurfaces.Count > 0;
+            return CleaningSpawnRules.HasRequiredSurfaceCount(_worldSpawnSurfaces.Count);
         }
 
         private void CacheWorldSpawnSurfaces()
@@ -624,111 +618,156 @@ namespace Game.Minigames
 
         private bool InitializeWorldStains()
         {
-            if (_worldSpawnSurfaces.Count <= 0 || _worldSpawnSurfaceColliders.Count <= 0)
+            if (!CleaningSpawnRules.HasRequiredSurfaceCount(_worldSpawnSurfaces.Count)
+                || _worldSpawnSurfaceBounds.Count != _worldSpawnSurfaces.Count
+                || _worldSpawnSurfaceColliders.Count != _worldSpawnSurfaces.Count)
             {
                 return false;
             }
 
-            int targetStainCount = ResolveTargetStainCount();
             int spawnSeed = _worldSpawnSeed ?? Environment.TickCount;
             System.Random rng = new System.Random(spawnSeed);
-            Transform stainParent = ResolveRuntimeStainParent();
-            List<Vector3> placedPositions = new List<Vector3>(Mathf.Max(4, targetStainCount));
-            float minSpacing = Mathf.Max(_worldStainMarkerScale * 1.2f, _worldStainMinSpacing);
-            int maxAttempts = Mathf.Max(targetStainCount * DefaultSpawnAttemptsPerStain, DefaultSpawnAttemptsPerStain);
-            int attempts = 0;
-
-            while (_worldStains.Count < targetStainCount && attempts < maxAttempts)
+            if (!CleaningSpawnRules.TryCreateSurfaceStainCounts(
+                    _worldSpawnSurfaces.Count,
+                    rng,
+                    out int[] stainsPerSurface))
             {
-                attempts++;
-                int surfaceIndex = rng.Next(0, _worldSpawnSurfaces.Count);
-                Transform spawnSurface = _worldSpawnSurfaces[surfaceIndex];
+                return false;
+            }
+
+            Transform stainParent = ResolveRuntimeStainParent();
+            float minSpacing = Mathf.Max(_worldStainMarkerScale * 1.2f, _worldStainMinSpacing);
+
+            for (int surfaceIndex = 0; surfaceIndex < stainsPerSurface.Length; surfaceIndex++)
+            {
                 Bounds spawnBounds = _worldSpawnSurfaceBounds[surfaceIndex];
                 Collider[] surfaceColliders = _worldSpawnSurfaceColliders[surfaceIndex];
+                int targetCount = stainsPerSurface[surfaceIndex];
+                CleaningSurfacePlacementBudget placement = new CleaningSurfacePlacementBudget(
+                    targetCount,
+                    targetCount * DefaultSpawnAttemptsPerStain,
+                    minSpacing);
 
-                if (!TryGetRandomPipeSurfacePosition(
+                while (placement.TryBeginAttempt())
+                {
+                    if (!TryGetRandomPipeSurfacePosition(
                         spawnBounds,
                         surfaceColliders,
                         rng,
-                        placedPositions,
+                        placement.AcceptedPositions,
                         minSpacing,
                         out Vector3 worldPosition,
                         out Vector3 surfaceNormal))
-                {
-                    continue;
-                }
-
-                Vector3 spawnPosition = worldPosition + (surfaceNormal * StainSurfaceOffset);
-                placedPositions.Add(spawnPosition);
-
-                GameObject stainObject = new GameObject($"WorldStain_{surfaceIndex}_{_worldStains.Count}");
-                stainObject.transform.SetParent(stainParent, true);
-                stainObject.transform.position = spawnPosition;
-                stainObject.transform.rotation = GetSurfaceAlignedRotation(surfaceNormal, (float)rng.NextDouble() * 360f);
-
-                float footprintScaleBoost = Mathf.Lerp(1.65f, 1.95f, (float)rng.NextDouble());
-                float baseScale = _worldStainMarkerScale * footprintScaleBoost * Mathf.Lerp(0.9f, 1.15f, (float)rng.NextDouble());
-                float majorScale = baseScale * Mathf.Lerp(0.95f, 1.15f, (float)rng.NextDouble());
-                float minorScale = baseScale * Mathf.Lerp(0.8f, 0.98f, (float)rng.NextDouble());
-                float secondaryScale = baseScale * Mathf.Lerp(0.55f, 0.8f, (float)rng.NextDouble());
-                float secondaryMinorScale = secondaryScale * Mathf.Lerp(0.9f, 1.1f, (float)rng.NextDouble());
-
-                float surfacePlanarMinAxis = GetPlanarMinAxisByNormal(surfaceNormal, spawnBounds.size);
-                float usableAxis = Mathf.Max(0.01f, surfacePlanarMinAxis - (_worldStainEdgePadding * 2f));
-                float maxCoverage = Mathf.Clamp(_worldStainMaxSurfaceCoverage, 0.1f, 0.95f);
-                float minCoverage = Mathf.Clamp(_worldStainMinSurfaceCoverage, 0.05f, maxCoverage);
-                float maxFootprint = usableAxis * maxCoverage;
-                float minFootprint = usableAxis * minCoverage;
-
-                majorScale = Mathf.Clamp(majorScale, minFootprint * 0.5f, maxFootprint * 0.5f);
-                minorScale = Mathf.Clamp(minorScale, minFootprint * 0.45f, maxFootprint * 0.5f);
-                float secondaryMajor = Mathf.Clamp(secondaryScale, minFootprint * 0.3f, majorScale * 0.85f);
-                float secondaryMinor = Mathf.Clamp(secondaryMinorScale, minFootprint * 0.3f, minorScale * 0.85f);
-
-                float stainDiameter = Mathf.Clamp(
-                    Mathf.Max(majorScale, secondaryMajor, secondaryMinor) * 2f,
-                    minFootprint * 0.65f,
-                    maxFootprint * 0.9f);
-
-                GameObject sphereObject = GameObject.CreatePrimitive(PrimitiveType.Cylinder);
-                sphereObject.name = "StainVisibleCylinder";
-                sphereObject.transform.SetParent(stainObject.transform, false);
-                sphereObject.transform.localPosition = Vector3.zero;
-                // Cylinder height is local Y; rotate so Y aligns with parent forward (surface normal).
-                sphereObject.transform.localRotation = Quaternion.FromToRotation(Vector3.up, Vector3.forward);
-                float stainThickness = Mathf.Max(0.01f, stainDiameter * 0.06f);
-                sphereObject.transform.localScale = new Vector3(stainDiameter, stainThickness, stainDiameter);
-
-                Collider sphereCollider = sphereObject.GetComponent<Collider>();
-                if (sphereCollider != null)
-                {
-                    Destroy(sphereCollider);
-                }
-
-                Renderer primaryRenderer = sphereObject.GetComponent<Renderer>();
-                if (primaryRenderer != null)
-                {
-                    Material stainMaterial = primaryRenderer.material;
-                    if (stainMaterial != null)
                     {
-                        Color visibleOilColor = _worldStainDirtyColor;
-                        visibleOilColor.a = 1f;
-                        stainMaterial.color = visibleOilColor;
+                        continue;
                     }
+
+                    Vector3 spawnPosition = worldPosition + (surfaceNormal * StainSurfaceOffset);
+                    if (!placement.TryAccept(spawnPosition))
+                    {
+                        continue;
+                    }
+
+                    _worldStains.Add(CreateWorldStain(
+                        surfaceIndex,
+                        placement.AcceptedPositions.Count - 1,
+                        stainParent,
+                        spawnPosition,
+                        surfaceNormal,
+                        spawnBounds,
+                        rng));
                 }
 
-                _worldStains.Add(new WorldStainState
+                if (!placement.IsComplete)
                 {
-                    MarkerTransform = stainObject.transform,
-                    MarkerRenderer = primaryRenderer,
-                    StainView = null,
-                    RequiredSwipes = CleaningToolRules.GetRequiredPasses(ActiveTool),
-                    SwipeProgress = 0f,
-                    IsCleaned = false
-                });
+                    Debug.LogError(
+                        $"[CleaningMinigame] Surface '{_worldSpawnSurfaces[surfaceIndex].name}' accepted " +
+                        $"{placement.AcceptedPositions.Count}/{targetCount} stains after " +
+                        $"{placement.Attempts} bounded attempts. Aborting session.",
+                        this);
+                    CleanupWorldStains();
+                    return false;
+                }
             }
 
-            return _worldStains.Count > 0;
+            return _worldStains.Count >= CleaningSpawnRules.RequiredSurfaceCount
+                && _worldStains.Count <= CleaningSpawnRules.RequiredSurfaceCount * CleaningSpawnRules.MaximumStainsPerSurface;
+        }
+
+        private WorldStainState CreateWorldStain(
+            int surfaceIndex,
+            int stainIndex,
+            Transform stainParent,
+            Vector3 spawnPosition,
+            Vector3 surfaceNormal,
+            Bounds spawnBounds,
+            System.Random rng)
+        {
+            GameObject stainObject = new GameObject($"WorldStain_{surfaceIndex}_{stainIndex}");
+            stainObject.transform.SetParent(stainParent, true);
+            stainObject.transform.position = spawnPosition;
+            stainObject.transform.rotation = GetSurfaceAlignedRotation(surfaceNormal, (float)rng.NextDouble() * 360f);
+
+            float footprintScaleBoost = Mathf.Lerp(1.65f, 1.95f, (float)rng.NextDouble());
+            float baseScale = _worldStainMarkerScale * footprintScaleBoost * Mathf.Lerp(0.9f, 1.15f, (float)rng.NextDouble());
+            float majorScale = baseScale * Mathf.Lerp(0.95f, 1.15f, (float)rng.NextDouble());
+            float minorScale = baseScale * Mathf.Lerp(0.8f, 0.98f, (float)rng.NextDouble());
+            float secondaryScale = baseScale * Mathf.Lerp(0.55f, 0.8f, (float)rng.NextDouble());
+            float secondaryMinorScale = secondaryScale * Mathf.Lerp(0.9f, 1.1f, (float)rng.NextDouble());
+
+            float surfacePlanarMinAxis = GetPlanarMinAxisByNormal(surfaceNormal, spawnBounds.size);
+            float usableAxis = Mathf.Max(0.01f, surfacePlanarMinAxis - (_worldStainEdgePadding * 2f));
+            float maxCoverage = Mathf.Clamp(_worldStainMaxSurfaceCoverage, 0.1f, 0.95f);
+            float minCoverage = Mathf.Clamp(_worldStainMinSurfaceCoverage, 0.05f, maxCoverage);
+            float maxFootprint = usableAxis * maxCoverage;
+            float minFootprint = usableAxis * minCoverage;
+
+            majorScale = Mathf.Clamp(majorScale, minFootprint * 0.5f, maxFootprint * 0.5f);
+            minorScale = Mathf.Clamp(minorScale, minFootprint * 0.45f, maxFootprint * 0.5f);
+            float secondaryMajor = Mathf.Clamp(secondaryScale, minFootprint * 0.3f, majorScale * 0.85f);
+            float secondaryMinor = Mathf.Clamp(secondaryMinorScale, minFootprint * 0.3f, minorScale * 0.85f);
+
+            float stainDiameter = Mathf.Clamp(
+                Mathf.Max(majorScale, secondaryMajor, secondaryMinor) * 2f,
+                minFootprint * 0.65f,
+                maxFootprint * 0.9f);
+
+            GameObject sphereObject = GameObject.CreatePrimitive(PrimitiveType.Cylinder);
+            sphereObject.name = "StainVisibleCylinder";
+            sphereObject.transform.SetParent(stainObject.transform, false);
+            sphereObject.transform.localPosition = Vector3.zero;
+            // Cylinder height is local Y; rotate so Y aligns with parent forward (surface normal).
+            sphereObject.transform.localRotation = Quaternion.FromToRotation(Vector3.up, Vector3.forward);
+            float stainThickness = Mathf.Max(0.01f, stainDiameter * 0.06f);
+            sphereObject.transform.localScale = new Vector3(stainDiameter, stainThickness, stainDiameter);
+
+            Collider sphereCollider = sphereObject.GetComponent<Collider>();
+            if (sphereCollider != null)
+            {
+                Destroy(sphereCollider);
+            }
+
+            Renderer primaryRenderer = sphereObject.GetComponent<Renderer>();
+            if (primaryRenderer != null)
+            {
+                Material stainMaterial = primaryRenderer.material;
+                if (stainMaterial != null)
+                {
+                    Color visibleOilColor = _worldStainDirtyColor;
+                    visibleOilColor.a = 1f;
+                    stainMaterial.color = visibleOilColor;
+                }
+            }
+
+            return new WorldStainState
+            {
+                MarkerTransform = stainObject.transform,
+                MarkerRenderer = primaryRenderer,
+                StainView = null,
+                RequiredSwipes = CleaningToolRules.GetRequiredPasses(ActiveTool),
+                SwipeProgress = 0f,
+                IsCleaned = false
+            };
         }
 
         private static float GetPlanarMinAxisByNormal(Vector3 surfaceNormal, Vector3 boundsSize)
@@ -780,34 +819,11 @@ namespace Game.Minigames
                 && Mathf.Abs(s.z - 1f) <= 0.01f;
         }
 
-        private int ResolveTargetStainCount()
-        {
-            int fallbackCount = Mathf.Max(1, _worldSpawnSurfaces.Count * Mathf.Max(1, _worldStainsPerSurface));
-
-            int minCount = _requiredStainsMin > 0 ? _requiredStainsMin : fallbackCount;
-            int maxCount = _requiredStainsMax > 0 ? _requiredStainsMax : minCount;
-            if (maxCount < minCount)
-            {
-                int swap = minCount;
-                minCount = maxCount;
-                maxCount = swap;
-            }
-
-            minCount = Mathf.Max(1, minCount);
-            maxCount = Mathf.Max(minCount, maxCount);
-            if (minCount == maxCount)
-            {
-                return minCount;
-            }
-
-            return UnityEngine.Random.Range(minCount, maxCount + 1);
-        }
-
         private static bool TryGetRandomPipeSurfacePosition(
             Bounds bounds,
             Collider[] surfaceColliders,
             System.Random rng,
-            List<Vector3> existingPositions,
+            IReadOnlyList<Vector3> existingPositions,
             float minDistance,
             out Vector3 position,
             out Vector3 normal)
@@ -939,7 +955,7 @@ namespace Game.Minigames
             return layer.GetComponent<Renderer>();
         }
 
-        private static bool HasNearbyPlacement(List<Vector3> existingPositions, Vector3 candidate, float minDistance)
+        private static bool HasNearbyPlacement(IReadOnlyList<Vector3> existingPositions, Vector3 candidate, float minDistance)
         {
             if (existingPositions == null || existingPositions.Count <= 0)
             {
