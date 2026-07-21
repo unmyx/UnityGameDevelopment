@@ -138,4 +138,185 @@ namespace Game.Minigames
             return true;
         }
     }
+
+    public sealed class CleaningSpawnTransaction<T>
+    {
+        private readonly List<T> _pendingItems = new List<T>();
+
+        public int PendingCount => _pendingItems.Count;
+
+        public void Add(T item)
+        {
+            _pendingItems.Add(item);
+        }
+
+        public void CommitTo(ICollection<T> destination)
+        {
+            if (destination == null)
+            {
+                throw new ArgumentNullException(nameof(destination));
+            }
+
+            for (int i = 0; i < _pendingItems.Count; i++)
+            {
+                destination.Add(_pendingItems[i]);
+            }
+
+            _pendingItems.Clear();
+        }
+
+        public void Rollback(Action<T> cleanup)
+        {
+            for (int i = 0; i < _pendingItems.Count; i++)
+            {
+                cleanup?.Invoke(_pendingItems[i]);
+            }
+
+            _pendingItems.Clear();
+        }
+    }
+
+    public sealed class CleaningStrokeTracker
+    {
+        private int? _latchedStainId;
+        private int _lastPassFrame = int.MinValue;
+
+        public int? LatchedStainId => _latchedStainId;
+        public bool IsTrackingToolUse { get; private set; }
+
+        public bool TryRegisterPass(
+            bool toolUseActive,
+            int? hoveredStainId,
+            int frameId,
+            out int stainId)
+        {
+            stainId = -1;
+            IsTrackingToolUse = toolUseActive;
+
+            if (!toolUseActive || !hoveredStainId.HasValue)
+            {
+                _latchedStainId = null;
+                return false;
+            }
+
+            if (_latchedStainId == hoveredStainId || _lastPassFrame == frameId)
+            {
+                return false;
+            }
+
+            _latchedStainId = hoveredStainId;
+            _lastPassFrame = frameId;
+            stainId = hoveredStainId.Value;
+            return true;
+        }
+
+        public void Reset()
+        {
+            _latchedStainId = null;
+            _lastPassFrame = int.MinValue;
+            IsTrackingToolUse = false;
+        }
+    }
+
+    public static class CleaningProgressMath
+    {
+        public static float CalculateOverallProgress(int completedPasses, int requiredPasses)
+        {
+            if (requiredPasses <= 0)
+            {
+                return 0f;
+            }
+
+            int boundedCompletedPasses = Mathf.Clamp(completedPasses, 0, requiredPasses);
+            return boundedCompletedPasses / (float)requiredPasses;
+        }
+    }
+
+    public static class CleaningPointerGeometry
+    {
+        public static bool IsRayOrSweepInsideRadius(
+            Ray currentRay,
+            bool hasPreviousRay,
+            Ray previousRay,
+            Vector3 target,
+            float radius,
+            out float currentDepth)
+        {
+            currentDepth = Vector3.Dot(target - currentRay.origin, currentRay.direction);
+            if (currentDepth <= 0f)
+            {
+                return false;
+            }
+
+            Vector3 currentPoint = currentRay.origin + (currentRay.direction * currentDepth);
+            float radiusSquared = Mathf.Max(0f, radius * radius);
+            if ((target - currentPoint).sqrMagnitude <= radiusSquared)
+            {
+                return true;
+            }
+
+            if (!hasPreviousRay)
+            {
+                return false;
+            }
+
+            float previousDepth = Vector3.Dot(target - previousRay.origin, previousRay.direction);
+            if (previousDepth <= 0f)
+            {
+                return false;
+            }
+
+            Vector3 previousPoint = previousRay.origin + (previousRay.direction * previousDepth);
+            return DistanceSquaredToSegment(target, previousPoint, currentPoint) <= radiusSquared;
+        }
+
+        private static float DistanceSquaredToSegment(Vector3 point, Vector3 start, Vector3 end)
+        {
+            Vector3 segment = end - start;
+            float segmentLengthSquared = segment.sqrMagnitude;
+            if (segmentLengthSquared <= Mathf.Epsilon)
+            {
+                return (point - start).sqrMagnitude;
+            }
+
+            float t = Mathf.Clamp01(Vector3.Dot(point - start, segment) / segmentLengthSquared);
+            Vector3 closestPoint = start + (segment * t);
+            return (point - closestPoint).sqrMagnitude;
+        }
+    }
+
+    public sealed class CleaningResultGate
+    {
+        public MinigameResult Result { get; private set; } = MinigameResult.None;
+        public bool HasResult => Result != MinigameResult.None;
+
+        public bool TrySet(MinigameResult result)
+        {
+            if (result == MinigameResult.None || HasResult)
+            {
+                return false;
+            }
+
+            Result = result;
+            return true;
+        }
+
+        public void Reset()
+        {
+            Result = MinigameResult.None;
+        }
+    }
+
+    public static class CleaningOutcomeRules
+    {
+        public static MinigameResult Resolve(bool timeExpired, bool allStainsClean)
+        {
+            if (timeExpired)
+            {
+                return MinigameResult.Fail;
+            }
+
+            return allStainsClean ? MinigameResult.Pass : MinigameResult.None;
+        }
+    }
 }

@@ -193,4 +193,276 @@ public class CleaningDomainTests
         Assert.That(placement.IsComplete, Is.False);
         Assert.That(placement.CanAttempt, Is.False);
     }
+
+    [Test]
+    public void FailedSpawnTransaction_CleansEveryPendingStain()
+    {
+        CleaningSpawnTransaction<string> transaction = new CleaningSpawnTransaction<string>();
+        transaction.Add("stain-a");
+        transaction.Add("stain-b");
+        int cleanedItems = 0;
+
+        transaction.Rollback(_ => cleanedItems++);
+
+        Assert.That(cleanedItems, Is.EqualTo(2));
+        Assert.That(transaction.PendingCount, Is.Zero);
+    }
+
+    [Test]
+    public void SuccessfulSpawnTransaction_CommitsEveryPendingStain()
+    {
+        CleaningSpawnTransaction<string> transaction = new CleaningSpawnTransaction<string>();
+        transaction.Add("stain-a");
+        transaction.Add("stain-b");
+        System.Collections.Generic.List<string> committed = new System.Collections.Generic.List<string>();
+
+        transaction.CommitTo(committed);
+
+        Assert.That(committed, Is.EqualTo(new[] { "stain-a", "stain-b" }));
+        Assert.That(transaction.PendingCount, Is.Zero);
+    }
+
+    [Test]
+    public void CursorMovementWithoutToolUse_DoesNotRegisterPass()
+    {
+        CleaningStrokeTracker tracker = new CleaningStrokeTracker();
+
+        Assert.That(tracker.TryRegisterPass(false, 10, 1, out _), Is.False);
+        Assert.That(tracker.LatchedStainId, Is.Null);
+    }
+
+    [Test]
+    public void SlowStrokeAcrossSeveralFrames_RegistersOnePass()
+    {
+        CleaningStrokeTracker tracker = new CleaningStrokeTracker();
+        int passes = 0;
+        tracker.TryRegisterPass(true, null, 1, out _);
+        for (int frame = 2; frame <= 12; frame++)
+        {
+            if (tracker.TryRegisterPass(true, 10, frame, out _))
+            {
+                passes++;
+            }
+        }
+
+        Assert.That(passes, Is.EqualTo(1));
+    }
+
+    [Test]
+    public void FastSingleFrameStroke_RegistersOnePass()
+    {
+        CleaningStrokeTracker tracker = new CleaningStrokeTracker();
+
+        Assert.That(tracker.TryRegisterPass(true, 10, 42, out int stainId), Is.True);
+        Assert.That(stainId, Is.EqualTo(10));
+    }
+
+    [Test]
+    public void FastSweepAcrossStain_IsDetectedInWorldSpace()
+    {
+        Vector3 stainPosition = new Vector3(0f, 0f, 10f);
+        Ray previousRay = new Ray(Vector3.zero, new Vector3(-1f, 0f, 10f).normalized);
+        Ray currentRay = new Ray(Vector3.zero, new Vector3(1f, 0f, 10f).normalized);
+
+        bool hit = CleaningPointerGeometry.IsRayOrSweepInsideRadius(
+            currentRay,
+            true,
+            previousRay,
+            stainPosition,
+            0.2f,
+            out _);
+
+        Assert.That(hit, Is.True);
+    }
+
+    [Test]
+    public void PointerSweepOutsideWorldRadius_DoesNotHitStain()
+    {
+        Vector3 stainPosition = new Vector3(0f, 2f, 10f);
+        Ray previousRay = new Ray(Vector3.zero, new Vector3(-1f, 0f, 10f).normalized);
+        Ray currentRay = new Ray(Vector3.zero, new Vector3(1f, 0f, 10f).normalized);
+
+        bool hit = CleaningPointerGeometry.IsRayOrSweepInsideRadius(
+            currentRay,
+            true,
+            previousRay,
+            stainPosition,
+            0.2f,
+            out _);
+
+        Assert.That(hit, Is.False);
+    }
+
+    [Test]
+    public void HoldingInsideStain_DoesNotRegisterAdditionalPasses()
+    {
+        CleaningStrokeTracker tracker = new CleaningStrokeTracker();
+        Assert.That(tracker.TryRegisterPass(true, 10, 1, out _), Is.True);
+
+        Assert.That(tracker.TryRegisterPass(true, 10, 2, out _), Is.False);
+        Assert.That(tracker.TryRegisterPass(true, 10, 100, out _), Is.False);
+    }
+
+    [Test]
+    public void ExitAndReenterDuringToolUse_RegistersNextPass()
+    {
+        CleaningStrokeTracker tracker = new CleaningStrokeTracker();
+        Assert.That(tracker.TryRegisterPass(true, 10, 1, out _), Is.True);
+        Assert.That(tracker.TryRegisterPass(true, null, 2, out _), Is.False);
+
+        Assert.That(tracker.TryRegisterPass(true, 10, 3, out _), Is.True);
+    }
+
+    [Test]
+    public void ReleaseAndPressAgainInsideStain_RegistersNextPass()
+    {
+        CleaningStrokeTracker tracker = new CleaningStrokeTracker();
+        Assert.That(tracker.TryRegisterPass(true, 10, 1, out _), Is.True);
+        Assert.That(tracker.TryRegisterPass(false, 10, 2, out _), Is.False);
+
+        Assert.That(tracker.TryRegisterPass(true, 10, 3, out _), Is.True);
+    }
+
+    [Test]
+    public void MultipleCallbacksInSameFrame_RegisterAtMostOnePass()
+    {
+        CleaningStrokeTracker tracker = new CleaningStrokeTracker();
+        int passes = 0;
+        if (tracker.TryRegisterPass(true, 10, 7, out _)) passes++;
+        if (tracker.TryRegisterPass(true, 10, 7, out _)) passes++;
+        if (tracker.TryRegisterPass(true, 11, 7, out _)) passes++;
+
+        Assert.That(passes, Is.EqualTo(1));
+    }
+
+    [TestCase(30)]
+    [TestCase(60)]
+    [TestCase(144)]
+    public void SimulatedFrameRate_DoesNotChangeStrokeResult(int framesPerSecond)
+    {
+        CleaningStrokeTracker tracker = new CleaningStrokeTracker();
+        int passes = 0;
+        for (int frame = 0; frame < framesPerSecond; frame++)
+        {
+            int? hoveredStain = frame >= framesPerSecond / 3 ? 10 : null;
+            if (tracker.TryRegisterPass(true, hoveredStain, frame, out _))
+            {
+                passes++;
+            }
+        }
+
+        Assert.That(passes, Is.EqualTo(1));
+    }
+
+    [Test]
+    public void StrokeResult_HasNoScreenPixelDistanceInput()
+    {
+        CleaningStrokeTracker lowResolutionTracker = new CleaningStrokeTracker();
+        CleaningStrokeTracker highResolutionTracker = new CleaningStrokeTracker();
+
+        bool lowResolutionResult = lowResolutionTracker.TryRegisterPass(true, 10, 1, out _);
+        bool highResolutionResult = highResolutionTracker.TryRegisterPass(true, 10, 1, out _);
+
+        Assert.That(highResolutionResult, Is.EqualTo(lowResolutionResult));
+    }
+
+    [Test]
+    public void ResultGate_SuccessCanBeEmittedOnlyOnce()
+    {
+        CleaningResultGate gate = new CleaningResultGate();
+
+        Assert.That(gate.TrySet(MinigameResult.Pass), Is.True);
+        Assert.That(gate.TrySet(MinigameResult.Pass), Is.False);
+        Assert.That(gate.Result, Is.EqualTo(MinigameResult.Pass));
+    }
+
+    [Test]
+    public void ResultGate_TimeoutCanBeEmittedOnlyOnce()
+    {
+        CleaningResultGate gate = new CleaningResultGate();
+
+        Assert.That(gate.TrySet(MinigameResult.Fail), Is.True);
+        Assert.That(gate.TrySet(MinigameResult.Fail), Is.False);
+        Assert.That(gate.Result, Is.EqualTo(MinigameResult.Fail));
+    }
+
+    [Test]
+    public void ResultGate_PreventsSuccessAndTimeoutDoubleResult()
+    {
+        CleaningResultGate gate = new CleaningResultGate();
+
+        Assert.That(gate.TrySet(MinigameResult.Fail), Is.True);
+        Assert.That(gate.TrySet(MinigameResult.Pass), Is.False);
+        Assert.That(gate.Result, Is.EqualTo(MinigameResult.Fail));
+    }
+
+    [Test]
+    public void OutcomeAtTimeoutBoundary_PreservesExistingTimeoutPriority()
+    {
+        MinigameResult result = CleaningOutcomeRules.Resolve(
+            timeExpired: true,
+            allStainsClean: true);
+
+        Assert.That(result, Is.EqualTo(MinigameResult.Fail));
+    }
+
+    [Test]
+    public void FinalPassBeforeTimeout_ResolvesAsSuccess()
+    {
+        MinigameResult result = CleaningOutcomeRules.Resolve(
+            timeExpired: false,
+            allStainsClean: true);
+
+        Assert.That(result, Is.EqualTo(MinigameResult.Pass));
+    }
+
+    [Test]
+    public void StrokeReset_ClearsCancelStateAndAllowsCleanRestart()
+    {
+        CleaningStrokeTracker tracker = new CleaningStrokeTracker();
+        tracker.TryRegisterPass(true, 10, 1, out _);
+
+        tracker.Reset();
+
+        Assert.That(tracker.LatchedStainId, Is.Null);
+        Assert.That(tracker.IsTrackingToolUse, Is.False);
+        Assert.That(tracker.TryRegisterPass(true, 10, 1, out _), Is.True);
+    }
+
+    [Test]
+    public void RestartedStain_HasNoOldProgress()
+    {
+        CleaningStainProgress previousSession = new CleaningStainProgress(ToolType.Chemical);
+        previousSession.TryRegisterPass();
+        CleaningStainProgress restartedSession = new CleaningStainProgress(ToolType.Chemical);
+
+        Assert.That(restartedSession.CompletedPasses, Is.Zero);
+        Assert.That(restartedSession.Progress01, Is.Zero);
+    }
+
+    [TestCase(-1, 6, 0f)]
+    [TestCase(0, 0, 0f)]
+    [TestCase(3, 6, 0.5f)]
+    [TestCase(6, 6, 1f)]
+    [TestCase(99, 6, 1f)]
+    public void OverallProgress_IsFiniteAndClamped(int completed, int required, float expected)
+    {
+        float progress = CleaningProgressMath.CalculateOverallProgress(completed, required);
+
+        Assert.That(progress, Is.EqualTo(expected));
+        Assert.That(float.IsNaN(progress), Is.False);
+        Assert.That(float.IsInfinity(progress), Is.False);
+        Assert.That(progress, Is.InRange(0f, 1f));
+    }
+
+    [Test]
+    public void EmptyOrInvalidSurfaceSetup_IsRejectedWithoutException()
+    {
+        Assert.DoesNotThrow(() =>
+        {
+            bool created = CleaningSpawnRules.TryCreateSurfaceStainCounts(0, null, out int[] counts);
+            Assert.That(created, Is.False);
+            Assert.That(counts, Is.Empty);
+        });
+    }
 }

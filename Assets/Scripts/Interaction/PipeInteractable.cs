@@ -72,18 +72,6 @@ namespace Game.Interaction
 
         [Header("World Cleaning Interaction")]
         [SerializeField]
-        [Min(8f)]
-        private float _worldStainScreenRadiusPixels = 52f;
-
-        [SerializeField]
-        [Min(0.1f)]
-        private float _worldMinMouseMovePixels = 1.5f;
-
-        [SerializeField]
-        [Min(0.001f)]
-        private float _worldSwipeGainPerPixel = 0.02f;
-
-        [SerializeField]
         [Min(0.01f)]
         private float _worldStainMarkerScale = 0.05f;
 
@@ -172,12 +160,10 @@ namespace Game.Interaction
             };
 
             float cleaningEffectivenessMultiplier = 1f;
-            float cleaningDayDifficultyMultiplier = 1f;
             GameManager gameManager = GameManager.Instance;
             if (gameManager != null)
             {
                 cleaningEffectivenessMultiplier = Mathf.Max(0.01f, gameManager.GetCleaningEffectivenessMultiplier());
-                cleaningDayDifficultyMultiplier = Mathf.Max(0.01f, gameManager.GetCleaningDayDifficultyMultiplier());
             }
 
             data.SetParameter("canvas", _cleaningCanvas);
@@ -194,9 +180,6 @@ namespace Game.Interaction
             data.SetParameter("world_top_down_angle_bias", _worldTopDownAngleBias);
             data.SetParameter("world_camera_fov", _worldCameraFovOverride);
             data.SetParameter("world_freeze_player", _freezePlayerMovementInWorldView);
-            data.SetParameter("world_stain_screen_radius", _worldStainScreenRadiusPixels);
-            data.SetParameter("world_min_mouse_move_pixels", _worldMinMouseMovePixels);
-            data.SetParameter("world_swipe_gain_per_pixel", _worldSwipeGainPerPixel * cleaningEffectivenessMultiplier * cleaningDayDifficultyMultiplier);
             data.SetParameter("world_stain_marker_scale", _worldStainMarkerScale);
             data.SetParameter("world_stain_min_spacing", _worldStainMinSpacing);
             data.SetParameter("world_spawn_seed", UnityEngine.Random.Range(int.MinValue, int.MaxValue));

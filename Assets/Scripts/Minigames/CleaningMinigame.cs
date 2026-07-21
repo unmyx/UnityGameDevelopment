@@ -16,12 +16,13 @@ namespace Game.Minigames
     {
         private sealed class WorldStainState
         {
+            public int Id;
             public Transform MarkerTransform;
             public Renderer MarkerRenderer;
             public OilStainView StainView;
-            public int RequiredSwipes;
-            public float SwipeProgress;
-            public bool IsCleaned;
+            public float HitRadiusWorld;
+            public CleaningStainProgress Progress;
+            public bool IsCleaned => Progress == null || Progress.IsComplete;
         }
 
         private const int DefaultSpawnAttemptsPerStain = 14;
@@ -46,9 +47,6 @@ namespace Game.Minigames
         [SerializeField] private bool _freezePlayerMovementInWorldView = true;
 
         [Header("World Stains")]
-        [SerializeField] private float _worldStainScreenRadiusPixels = 52f;
-        [SerializeField] private float _minMouseMovePixelsForCleaning = 1.5f;
-        [SerializeField] private float _worldSwipeGainPerPixel = 0.02f;
         [SerializeField] private float _worldStainMarkerScale = 0.14f;
         [SerializeField] private Color _worldStainDirtyColor = new Color(0.46f, 0.27f, 0.12f, 0.97f);
         [SerializeField] private Color _worldStainHoverColor = new Color(0.94f, 0.67f, 0.29f, 1f);
@@ -96,9 +94,11 @@ namespace Game.Minigames
         private Vector3 _returnTransitionStartPosition;
         private Quaternion _returnTransitionStartRotation;
         private MinigameResult _pendingResult = MinigameResult.None;
-        private bool _hasMousePosition;
-        private Vector2 _previousMousePosition;
         private bool _usesPresentationCursorAuthority;
+        private readonly CleaningStrokeTracker _strokeTracker = new CleaningStrokeTracker();
+        private readonly CleaningResultGate _resultGate = new CleaningResultGate();
+        private bool _hasPreviousPointerRay;
+        private Ray _previousPointerRay;
 
         private PlayerController _playerController;
         private bool _playerControllerWasEnabled;
@@ -147,7 +147,9 @@ namespace Game.Minigames
             _isFinishing = false;
             _isReturningToGameplayView = false;
             _pendingResult = MinigameResult.None;
-            _hasMousePosition = false;
+            _strokeTracker.Reset();
+            _resultGate.Reset();
+            _hasPreviousPointerRay = false;
 
             ConfigureAssignedTimerUI();
             ConfigureAssignedProgressUI();
@@ -210,7 +212,7 @@ namespace Game.Minigames
 
             if (_cleanedStains >= _totalStains && _totalStains > 0)
             {
-                RequestFinish(MinigameResult.Pass);
+                RequestFinish(CleaningOutcomeRules.Resolve(timeExpired: false, allStainsClean: true));
             }
         }
 
@@ -255,8 +257,18 @@ namespace Game.Minigames
             _isFinishing = false;
             _isReturningToGameplayView = false;
             _pendingResult = MinigameResult.None;
-            _hasMousePosition = false;
+            _strokeTracker.Reset();
+            _resultGate.Reset();
+            _hasPreviousPointerRay = false;
             _toolSession.Clear();
+        }
+
+        private void OnDisable()
+        {
+            if (IsActive())
+            {
+                SetResult(MinigameResult.Fail);
+            }
         }
 
         private void LoadParameters()
@@ -300,9 +312,6 @@ namespace Game.Minigames
             _worldTopDownAngleBias = GetParameterFloat("world_top_down_angle_bias") ?? _worldTopDownAngleBias;
             _worldCameraFovOverride = GetParameterFloat("world_camera_fov") ?? _worldCameraFovOverride;
 
-            _worldStainScreenRadiusPixels = Mathf.Max(8f, GetParameterFloat("world_stain_screen_radius") ?? _worldStainScreenRadiusPixels);
-            _minMouseMovePixelsForCleaning = Mathf.Max(0.1f, GetParameterFloat("world_min_mouse_move_pixels") ?? _minMouseMovePixelsForCleaning);
-            _worldSwipeGainPerPixel = Mathf.Max(0.001f, GetParameterFloat("world_swipe_gain_per_pixel") ?? _worldSwipeGainPerPixel);
             _worldStainMarkerScale = Mathf.Max(0.01f, GetParameterFloat("world_stain_marker_scale") ?? _worldStainMarkerScale);
             _worldStainMinSpacing = Mathf.Max(0.01f, GetParameterFloat("world_stain_min_spacing") ?? _worldStainMinSpacing);
             _worldStainMaxSurfaceCoverage = Mathf.Clamp(
@@ -499,7 +508,8 @@ namespace Game.Minigames
                 return false;
             }
 
-            _hasMousePosition = false;
+            _strokeTracker.Reset();
+            _hasPreviousPointerRay = false;
             _cleanedStains = 0;
             _totalStains = _worldStains.Count;
             _isUsingWorldPresentation = true;
@@ -637,6 +647,8 @@ namespace Game.Minigames
 
             Transform stainParent = ResolveRuntimeStainParent();
             float minSpacing = Mathf.Max(_worldStainMarkerScale * 1.2f, _worldStainMinSpacing);
+            CleaningSpawnTransaction<WorldStainState> spawnTransaction = new CleaningSpawnTransaction<WorldStainState>();
+            int nextStainId = 0;
 
             for (int surfaceIndex = 0; surfaceIndex < stainsPerSurface.Length; surfaceIndex++)
             {
@@ -668,7 +680,8 @@ namespace Game.Minigames
                         continue;
                     }
 
-                    _worldStains.Add(CreateWorldStain(
+                    spawnTransaction.Add(CreateWorldStain(
+                        nextStainId++,
                         surfaceIndex,
                         placement.AcceptedPositions.Count - 1,
                         stainParent,
@@ -685,16 +698,18 @@ namespace Game.Minigames
                         $"{placement.AcceptedPositions.Count}/{targetCount} stains after " +
                         $"{placement.Attempts} bounded attempts. Aborting session.",
                         this);
-                    CleanupWorldStains();
+                    spawnTransaction.Rollback(DestroyWorldStain);
                     return false;
                 }
             }
 
+            spawnTransaction.CommitTo(_worldStains);
             return _worldStains.Count >= CleaningSpawnRules.RequiredSurfaceCount
                 && _worldStains.Count <= CleaningSpawnRules.RequiredSurfaceCount * CleaningSpawnRules.MaximumStainsPerSurface;
         }
 
         private WorldStainState CreateWorldStain(
+            int worldStainId,
             int surfaceIndex,
             int stainIndex,
             Transform stainParent,
@@ -761,12 +776,12 @@ namespace Game.Minigames
 
             return new WorldStainState
             {
+                Id = worldStainId,
                 MarkerTransform = stainObject.transform,
                 MarkerRenderer = primaryRenderer,
                 StainView = null,
-                RequiredSwipes = CleaningToolRules.GetRequiredPasses(ActiveTool),
-                SwipeProgress = 0f,
-                IsCleaned = false
+                HitRadiusWorld = Mathf.Max(0.01f, stainDiameter * 0.55f),
+                Progress = new CleaningStainProgress(ActiveTool)
             };
         }
 
@@ -979,21 +994,16 @@ namespace Game.Minigames
             Camera targetCamera = GetWorldTargetingCamera();
             if (targetCamera == null || _worldStains.Count == 0)
             {
+                _strokeTracker.TryRegisterPass(false, null, Time.frameCount, out _);
+                _hasPreviousPointerRay = false;
                 return;
             }
 
             Vector2 mousePosition = UnityEngine.Input.mousePosition;
-            if (!_hasMousePosition)
-            {
-                _hasMousePosition = true;
-                _previousMousePosition = mousePosition;
-            }
-
-            float movementPixels = Vector2.Distance(mousePosition, _previousMousePosition);
-            _previousMousePosition = mousePosition;
-
+            Ray pointerRay = targetCamera.ScreenPointToRay(mousePosition);
+            bool toolUseActive = UnityEngine.Input.GetMouseButton(0);
             WorldStainState nearestStain = null;
-            float nearestDistance = float.MaxValue;
+            float nearestDepth = float.MaxValue;
 
             for (int i = 0; i < _worldStains.Count; i++)
             {
@@ -1003,28 +1013,36 @@ namespace Game.Minigames
                     continue;
                 }
 
-                Vector3 screenPoint3 = targetCamera.WorldToScreenPoint(stain.MarkerTransform.position);
-                if (screenPoint3.z <= 0f)
+                if (!CleaningPointerGeometry.IsRayOrSweepInsideRadius(
+                        pointerRay,
+                        toolUseActive && _hasPreviousPointerRay,
+                        _previousPointerRay,
+                        stain.MarkerTransform.position,
+                        stain.HitRadiusWorld,
+                        out float depth)
+                    || depth >= nearestDepth)
                 {
                     continue;
                 }
 
-                float distance = Vector2.Distance(mousePosition, new Vector2(screenPoint3.x, screenPoint3.y));
-                if (distance <= _worldStainScreenRadiusPixels && distance < nearestDistance)
-                {
-                    nearestDistance = distance;
-                    nearestStain = stain;
-                }
+                nearestDepth = depth;
+                nearestStain = stain;
             }
 
-            if (nearestStain != null && movementPixels >= _minMouseMovePixelsForCleaning)
+            _previousPointerRay = pointerRay;
+            _hasPreviousPointerRay = true;
+            int? hoveredStainId = nearestStain?.Id;
+            if (_strokeTracker.TryRegisterPass(
+                    toolUseActive,
+                    hoveredStainId,
+                    Time.frameCount,
+                    out int registeredStainId)
+                && nearestStain != null
+                && nearestStain.Id == registeredStainId
+                && nearestStain.Progress.TryRegisterPass())
             {
-                float proximityFactor = 1f - Mathf.Clamp01(nearestDistance / Mathf.Max(1f, _worldStainScreenRadiusPixels));
-                float swipeGain = movementPixels * _worldSwipeGainPerPixel * Mathf.Lerp(0.45f, 1.1f, proximityFactor);
-                nearestStain.SwipeProgress += swipeGain;
-                if (nearestStain.SwipeProgress >= nearestStain.RequiredSwipes)
+                if (nearestStain.IsCleaned)
                 {
-                    nearestStain.IsCleaned = true;
                     _cleanedStains++;
                     if (nearestStain.StainView != null)
                     {
@@ -1053,10 +1071,7 @@ namespace Game.Minigames
         {
             if (stain?.StainView != null)
             {
-                float progress01 = stain.RequiredSwipes <= 0
-                    ? 1f
-                    : Mathf.Clamp01(stain.SwipeProgress / stain.RequiredSwipes);
-                stain.StainView.SetProgress01(progress01, isHovered && !stain.IsCleaned);
+                stain.StainView.SetProgress01(stain.Progress.Progress01, isHovered && !stain.IsCleaned);
                 return;
             }
 
@@ -1077,11 +1092,10 @@ namespace Game.Minigames
                 return;
             }
 
-            float cleanedRatio = stain.RequiredSwipes <= 0
-                ? 0f
-                : Mathf.Clamp01(stain.SwipeProgress / stain.RequiredSwipes);
-
-            Color baseColor = Color.Lerp(_worldStainDirtyColor, _worldStainCleanColor, cleanedRatio * 0.45f);
+            Color baseColor = Color.Lerp(
+                _worldStainDirtyColor,
+                _worldStainCleanColor,
+                stain.Progress.Progress01 * 0.45f);
             material.color = isHovered ? _worldStainHoverColor : baseColor;
         }
 
@@ -1100,10 +1114,7 @@ namespace Game.Minigames
             for (int i = 0; i < _worldStains.Count; i++)
             {
                 WorldStainState stain = _worldStains[i];
-                if (stain?.MarkerTransform != null)
-                {
-                    Destroy(stain.MarkerTransform.gameObject);
-                }
+                DestroyWorldStain(stain);
             }
 
             _worldStains.Clear();
@@ -1112,11 +1123,23 @@ namespace Game.Minigames
             _worldSpawnSurfaceColliders.Clear();
             _totalStains = 0;
             _cleanedStains = 0;
+            _strokeTracker.Reset();
+            _hasPreviousPointerRay = false;
+        }
+
+        private void DestroyWorldStain(WorldStainState stain)
+        {
+            if (stain?.MarkerTransform != null)
+            {
+                Destroy(stain.MarkerTransform.gameObject);
+            }
+
+            stain?.Progress?.Reset();
         }
 
         private void RequestFinish(MinigameResult result)
         {
-            if (result == MinigameResult.None || _isFinishing)
+            if (!_resultGate.TrySet(result))
             {
                 return;
             }
@@ -1532,7 +1555,7 @@ namespace Game.Minigames
 
             _hasProcessedTimeoutFailure = true;
             ApplyTimeoutCurrencyPenalty();
-            RequestFinish(MinigameResult.Fail);
+            RequestFinish(CleaningOutcomeRules.Resolve(timeExpired: true, allStainsClean: false));
         }
 
         private void ApplyTimeoutCurrencyPenalty()
@@ -1671,9 +1694,28 @@ namespace Game.Minigames
                 return;
             }
 
-            _progressText.text = $"Cleaned: {_cleanedStains}/{_totalStains}";
-            float progress01 = Mathf.Clamp01(_cleanedStains / (float)_totalStains);
+            float progress01 = CalculateOverallPassProgress();
+            _progressText.text = $"Cleaned: {_cleanedStains}/{_totalStains}  Progress: {progress01:P0}";
             _progressText.color = Color.Lerp(Color.white, new Color(1f, 0.85f, 0.55f, 1f), progress01);
+        }
+
+        private float CalculateOverallPassProgress()
+        {
+            int completedPasses = 0;
+            int requiredPasses = 0;
+            for (int i = 0; i < _worldStains.Count; i++)
+            {
+                CleaningStainProgress progress = _worldStains[i]?.Progress;
+                if (progress == null)
+                {
+                    continue;
+                }
+
+                completedPasses += progress.CompletedPasses;
+                requiredPasses += progress.RequiredPasses;
+            }
+
+            return CleaningProgressMath.CalculateOverallProgress(completedPasses, requiredPasses);
         }
 
         private void UpdateToolUI()
