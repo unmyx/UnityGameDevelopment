@@ -1,7 +1,5 @@
 using Game.Core;
 using Game.Core.Events;
-using Game.Minigames;
-using Game.Player;
 using Unity.Netcode;
 using UnityEngine;
 using UnityEngine.SceneManagement;
@@ -139,24 +137,21 @@ namespace Game.Networking
                 return;
             }
 
-            MinigameManager minigameManager = MinigameManager.Instance;
-            if (minigameManager != null)
-            {
-                minigameManager.ForceCancelActiveMinigameForLocalOwner();
-            }
-
-            PlayerContextLocator.TrySetLocalPresentationMode(LocalPlayerPresentationMode.FreePlay);
             EventBus.Publish(new PlayerFeedbackEvent("Disconnected from host."));
-
-            if (manager != null && manager.IsListening)
-            {
-                manager.Shutdown();
-            }
 
             if (SceneManager.GetActiveScene().IsValid()
                 && !string.Equals(SceneManager.GetActiveScene().name, MenuSceneName, System.StringComparison.Ordinal))
             {
-                NetworkSafeSceneRouter.TryRouteToMenu(this, allowClientLocalLoad: true);
+                if (NetworkSafeSceneRouter.TryRouteToMenu(this, allowClientLocalLoad: true))
+                {
+                    return;
+                }
+            }
+
+            if (manager != null && manager.IsListening)
+            {
+                MarkLocalShutdownIntent();
+                manager.Shutdown();
             }
         }
     }

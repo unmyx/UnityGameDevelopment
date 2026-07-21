@@ -48,6 +48,7 @@ namespace Game.Minigames
         private int _managerLifetimeScope;
         private int _lastTerminalFlowFrame = -1;
         private string _lastTerminalFlowType;
+        private bool _isCompletingTerminalFlow;
         private bool _hasLoggedHomeSceneOptionalCanvasInfo;
         private bool _hasLoggedGameplaySceneCanvasWarning;
 
@@ -239,45 +240,54 @@ namespace Game.Minigames
                 return;
             }
 
-            MinigameResult result = _activeMinigame.GetResult();
-            string minigameId = _activeMinigame.GetMinigameId();
-            string ownerPlayerId = _activeOwnerPlayerId;
-
-            _activeMinigame.OnMinigameEnd();
-
-            if (_minigameGameObject != null)
+            if (_isCompletingTerminalFlow)
             {
-                Destroy(_minigameGameObject);
+                WarnIfDuplicateTerminalFlow("end", _activeMinigame.GetResult());
+                return;
             }
 
-            EventBus.Publish(new MinigameEndedEvent(result, minigameId, ownerPlayerId));
-            EndLocalPresentationForOwner(ownerPlayerId);
-
-            if (ObjectiveManager.TryGetInstance(out ObjectiveManager objectiveManager))
+            _isCompletingTerminalFlow = true;
+            try
             {
-                objectiveManager.SyncAfterLoad();
+                MinigameResult result = _activeMinigame.GetResult();
+                string minigameId = _activeMinigame.GetMinigameId();
+                string ownerPlayerId = _activeOwnerPlayerId;
+                int sessionToken = _activeSessionToken;
+                MinigameData minigameData = _activeMinigame.GetMinigameData();
+
+                _activeMinigame.OnMinigameEnd();
+
+                if (_minigameGameObject != null)
+                {
+                    Destroy(_minigameGameObject);
+                }
+
+                ClearActiveSession("end");
+                EndLocalPresentationForOwner(ownerPlayerId);
+                EnsureMinigameCanvasesHidden();
+
+                if (ObjectiveManager.TryGetInstance(out ObjectiveManager objectiveManager))
+                {
+                    objectiveManager.SyncAfterLoad();
+                }
+                else
+                {
+                    Debug.LogWarning("[MinigameManager] ObjectiveManager is missing; objective sync skipped after minigame end.");
+                }
+                MinigameRewardSystem.DistributeRewards(
+                    result,
+                    minigameId,
+                    ownerPlayerId,
+                    sessionToken,
+                    _managerLifetimeScope,
+                    minigameData);
+
+                EventBus.Publish(new MinigameEndedEvent(result, minigameId, ownerPlayerId));
             }
-            else
+            finally
             {
-                Debug.LogWarning("[MinigameManager] ObjectiveManager is missing; objective sync skipped after minigame end.");
+                _isCompletingTerminalFlow = false;
             }
-            MinigameRewardSystem.DistributeRewards(
-                result,
-                minigameId,
-                ownerPlayerId,
-                _activeSessionToken,
-                _managerLifetimeScope,
-                _activeMinigame.GetMinigameData());
-
-            _activeMinigame = null;
-            _minigameGameObject = null;
-            _minigameType = null;
-            _activeSessionToken = 0;
-            _activeOwnerPlayerId = PlayerContextRegistry.DefaultLocalPlayerId;
-            _lastTerminalFlowFrame = Time.frameCount;
-            _lastTerminalFlowType = "end";
-
-            EnsureMinigameCanvasesHidden();
         }
 
         public void CancelActiveMinigame()
@@ -288,27 +298,44 @@ namespace Game.Minigames
                 return;
             }
 
-            _activeMinigame.OnMinigameEnd();
-            string minigameId = _activeMinigame.GetMinigameId();
-            string ownerPlayerId = _activeOwnerPlayerId;
-
-            if (_minigameGameObject != null)
+            if (_isCompletingTerminalFlow)
             {
-                Destroy(_minigameGameObject);
+                WarnIfDuplicateTerminalFlow("cancel", MinigameResult.Cancelled);
+                return;
             }
 
-            EventBus.Publish(new MinigameCancelledEvent(MinigameResult.Cancelled, minigameId, ownerPlayerId));
-            EndLocalPresentationForOwner(ownerPlayerId);
+            _isCompletingTerminalFlow = true;
+            try
+            {
+                _activeMinigame.OnMinigameEnd();
+                string minigameId = _activeMinigame.GetMinigameId();
+                string ownerPlayerId = _activeOwnerPlayerId;
 
+                if (_minigameGameObject != null)
+                {
+                    Destroy(_minigameGameObject);
+                }
+
+                ClearActiveSession("cancel");
+                EndLocalPresentationForOwner(ownerPlayerId);
+                EnsureMinigameCanvasesHidden();
+                EventBus.Publish(new MinigameCancelledEvent(MinigameResult.Cancelled, minigameId, ownerPlayerId));
+            }
+            finally
+            {
+                _isCompletingTerminalFlow = false;
+            }
+        }
+
+        private void ClearActiveSession(string terminalFlowType)
+        {
             _activeMinigame = null;
             _minigameGameObject = null;
             _minigameType = null;
             _activeSessionToken = 0;
             _activeOwnerPlayerId = PlayerContextRegistry.DefaultLocalPlayerId;
             _lastTerminalFlowFrame = Time.frameCount;
-            _lastTerminalFlowType = "cancel";
-
-            EnsureMinigameCanvasesHidden();
+            _lastTerminalFlowType = terminalFlowType;
         }
 
         public IMinigame GetActiveMinigame()
@@ -704,7 +731,11 @@ namespace Game.Minigames
             }
 
             PlayerContextLocator.EndLocalMinigamePresentation(ownerPlayerId);
-            PlayerContextLocator.TrySetLocalPresentationMode(LocalPlayerPresentationMode.FreePlay);
+            GameManager gameManager = GameManager.Instance;
+            PlayerContextLocator.TrySetLocalPresentationMode(
+                gameManager != null && gameManager.IsSceneRoutePending
+                    ? LocalPlayerPresentationMode.Menu
+                    : LocalPlayerPresentationMode.FreePlay);
         }
     }
 }

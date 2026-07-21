@@ -318,6 +318,12 @@ namespace Game.Core
         private bool _hasCriticalSetupFailure;
         private bool _isRunPhaseSceneRouting;
         private bool _hasRoutedAfterFailure;
+        private bool _isSceneRoutePending;
+        private string _pendingSceneRouteName = string.Empty;
+        private bool _sceneRouteMinigameCleanupCompleted;
+        private string _activeLocalMinigameId = string.Empty;
+
+        public bool IsSceneRoutePending => _isSceneRoutePending;
 
         private void Awake()
         {
@@ -416,17 +422,28 @@ namespace Game.Core
         private void OnSceneLoaded(Scene scene, LoadSceneMode mode)
         {
             _isRunPhaseSceneRouting = false;
+            if (!EnsureMinigameCleanupForLoadedScene(scene.name, out string cleanupFailure))
+            {
+                FailCriticalSetup($"Cannot refresh state after loading scene '{scene.name}': {cleanupFailure}");
+                CompletePendingSceneRoute();
+                return;
+            }
+
             RefreshRuntimeBindings();
             if (ShouldBypassStateBootstrapForActiveScene())
             {
                 SuppressStateBootstrapForCurrentScene();
+                CompletePendingSceneRoute();
                 return;
             }
 
             if (!DetermineAndInitializeStartingState())
             {
+                CompletePendingSceneRoute();
                 return;
             }
+
+            CompletePendingSceneRoute();
 
             if (_currentState == GameState.Menu)
             {
@@ -493,12 +510,31 @@ namespace Game.Core
                 return;
             }
 
+            if (_isSceneRoutePending)
+            {
+                MinigameManager.Instance?.ForceCancelActiveMinigameForLocalOwner();
+                return;
+            }
+
+            IMinigame activeMinigame = MinigameManager.Instance?.GetActiveMinigame();
+            if (activeMinigame == null
+                || !string.Equals(activeMinigame.GetMinigameId(), eventData.MinigameId, StringComparison.Ordinal))
+            {
+                return;
+            }
+
             if (_currentState == GameState.Minigame)
             {
                 return;
             }
 
-            ChangeStateInternal(GameState.Minigame);
+            if (ChangeStateInternal(GameState.Minigame))
+            {
+                _activeLocalMinigameId = eventData.MinigameId ?? string.Empty;
+                return;
+            }
+
+            MinigameManager.Instance?.ForceCancelActiveMinigameForLocalOwner();
         }
 
         private void OnMinigameEnded(MinigameEndedEvent eventData)
@@ -508,7 +544,14 @@ namespace Game.Core
                 return;
             }
 
-            if (_currentState == GameState.Minigame)
+            if (string.IsNullOrEmpty(_activeLocalMinigameId)
+                || !string.Equals(_activeLocalMinigameId, eventData.MinigameId, StringComparison.Ordinal))
+            {
+                return;
+            }
+
+            _activeLocalMinigameId = string.Empty;
+            if (!_isSceneRoutePending && _currentState == GameState.Minigame)
             {
                 ChangeStateInternal(GameState.FreePlay);
             }
@@ -526,7 +569,14 @@ namespace Game.Core
                 return;
             }
 
-            if (_currentState == GameState.Minigame)
+            if (string.IsNullOrEmpty(_activeLocalMinigameId)
+                || !string.Equals(_activeLocalMinigameId, eventData.MinigameId, StringComparison.Ordinal))
+            {
+                return;
+            }
+
+            _activeLocalMinigameId = string.Empty;
+            if (!_isSceneRoutePending && _currentState == GameState.Minigame)
             {
                 ChangeStateInternal(GameState.FreePlay);
             }
@@ -792,12 +842,186 @@ namespace Game.Core
 
         public void RequestReturnToFreePlay()
         {
+            if (_currentState == GameState.Minigame
+                && MinigameManager.Instance != null
+                && MinigameManager.Instance.IsMinigameActive())
+            {
+                LogRejectedStateTransition(
+                    GameState.Minigame,
+                    GameState.FreePlay,
+                    "The active minigame must finish or complete cancel cleanup first.");
+                return;
+            }
+
             ChangeStateInternal(GameState.FreePlay);
         }
 
         public void RequestReturnToMenu()
         {
-            ChangeStateInternal(GameState.Menu);
+            NetworkSafeSceneRouter.TryRouteToMenu(this, allowClientLocalLoad: true);
+        }
+
+        public bool TryPrepareForSceneRoute(string targetSceneName, out string failureReason)
+        {
+            if (string.IsNullOrWhiteSpace(targetSceneName))
+            {
+                failureReason = "Target scene name is empty.";
+                return false;
+            }
+
+            if (_isSceneRoutePending)
+            {
+                failureReason = $"Scene route to '{_pendingSceneRouteName}' is already pending.";
+                return false;
+            }
+
+            EnsureServicesInitialized();
+            string normalizedTarget = targetSceneName.Trim();
+            if (_stateResolver.TryResolveStateFromSceneName(normalizedTarget, out GameState targetState))
+            {
+                GameStateTransitionDecision decision = GameStateTransitionPolicy.Evaluate(
+                    _currentState,
+                    targetState,
+                    GameStateTransitionContext.SceneRefresh,
+                    minigameCleanupCompleted: true);
+                if (!decision.IsAllowed)
+                {
+                    failureReason = decision.Reason;
+                    return false;
+                }
+            }
+
+            _isSceneRoutePending = true;
+            _pendingSceneRouteName = normalizedTarget;
+            _sceneRouteMinigameCleanupCompleted = _currentState != GameState.Minigame;
+
+            if (PauseManager.TryGetInstance(out PauseManager pauseManager) && pauseManager.IsPaused)
+            {
+                pauseManager.Resume();
+            }
+
+            // This presentation mode is the route lock: gameplay interaction/camera input stays
+            // disabled between cancel cleanup and the destination state's OnStateEnter.
+            PlayerContextLocator.TrySetLocalPresentationMode(LocalPlayerPresentationMode.Menu);
+
+            MinigameManager minigameManager = MinigameManager.Instance;
+            if (minigameManager != null && minigameManager.IsMinigameActive())
+            {
+                if (!minigameManager.ForceCancelActiveMinigameForLocalOwner()
+                    || minigameManager.IsMinigameActive())
+                {
+                    AbortPendingSceneRoute();
+                    failureReason = "The active local minigame could not complete its cancel cleanup.";
+                    return false;
+                }
+            }
+
+            _sceneRouteMinigameCleanupCompleted = minigameManager == null || !minigameManager.IsMinigameActive();
+            if (_currentState == GameState.Minigame && !_sceneRouteMinigameCleanupCompleted)
+            {
+                AbortPendingSceneRoute();
+                failureReason = "Minigame cleanup did not complete before scene routing.";
+                return false;
+            }
+
+            if (_stateResolver.TryResolveStateFromSceneName(normalizedTarget, out targetState))
+            {
+                GameStateTransitionDecision preparedDecision = GameStateTransitionPolicy.Evaluate(
+                    _currentState,
+                    targetState,
+                    GameStateTransitionContext.SceneRefresh,
+                    _sceneRouteMinigameCleanupCompleted);
+                if (!preparedDecision.IsAllowed)
+                {
+                    AbortPendingSceneRoute();
+                    failureReason = preparedDecision.Reason;
+                    return false;
+                }
+            }
+
+            PlayerContextLocator.TrySetLocalPresentationMode(LocalPlayerPresentationMode.Menu);
+            failureReason = string.Empty;
+            return true;
+        }
+
+        public void NotifySceneRouteFailed()
+        {
+            if (!_isSceneRoutePending)
+            {
+                return;
+            }
+
+            bool cancelledMinigame = _currentState == GameState.Minigame
+                                     && _sceneRouteMinigameCleanupCompleted;
+            AbortPendingSceneRoute();
+
+            if (cancelledMinigame)
+            {
+                ChangeStateInternal(GameState.FreePlay);
+                return;
+            }
+
+            PlayerContextLocator.TrySetLocalPresentationMode(
+                _currentState == GameState.Menu
+                    ? LocalPlayerPresentationMode.Menu
+                    : LocalPlayerPresentationMode.FreePlay);
+        }
+
+        private bool EnsureMinigameCleanupForLoadedScene(string loadedSceneName, out string failureReason)
+        {
+            if (_currentState != GameState.Minigame)
+            {
+                _sceneRouteMinigameCleanupCompleted = true;
+                failureReason = string.Empty;
+                return true;
+            }
+
+            if (!_isSceneRoutePending)
+            {
+                _isSceneRoutePending = true;
+                _pendingSceneRouteName = loadedSceneName ?? string.Empty;
+                PlayerContextLocator.TrySetLocalPresentationMode(LocalPlayerPresentationMode.Menu);
+            }
+
+            MinigameManager minigameManager = MinigameManager.Instance;
+            if (minigameManager != null && minigameManager.IsMinigameActive())
+            {
+                minigameManager.ForceCancelActiveMinigameForLocalOwner();
+            }
+
+            _sceneRouteMinigameCleanupCompleted = minigameManager == null || !minigameManager.IsMinigameActive();
+            if (_sceneRouteMinigameCleanupCompleted)
+            {
+                failureReason = string.Empty;
+                return true;
+            }
+
+            failureReason = "An active minigame remained after the mandatory scene-load cancel attempt.";
+            return false;
+        }
+
+        private void AbortPendingSceneRoute()
+        {
+            _isSceneRoutePending = false;
+            _pendingSceneRouteName = string.Empty;
+            _sceneRouteMinigameCleanupCompleted = false;
+            _isRunPhaseSceneRouting = false;
+
+            bool hasActiveMinigame = MinigameManager.Instance != null
+                                     && MinigameManager.Instance.IsMinigameActive();
+            LocalPlayerPresentationMode mode = _currentState == GameState.Menu
+                ? LocalPlayerPresentationMode.Menu
+                : hasActiveMinigame
+                    ? LocalPlayerPresentationMode.Minigame
+                    : LocalPlayerPresentationMode.FreePlay;
+            PlayerContextLocator.TrySetLocalPresentationMode(mode);
+        }
+
+        private void CompletePendingSceneRoute()
+        {
+            _isSceneRoutePending = false;
+            _pendingSceneRouteName = string.Empty;
+            _sceneRouteMinigameCleanupCompleted = false;
         }
 
         private void LogRejectedStateTransition(GameState from, GameState to, string reason)
@@ -3947,7 +4171,13 @@ namespace Game.Core
             }
 
             _isRunPhaseSceneRouting = true;
-            return TryLoadSceneAuthoritatively(targetSceneName);
+            bool routeStarted = TryLoadSceneAuthoritatively(targetSceneName);
+            if (!routeStarted)
+            {
+                _isRunPhaseSceneRouting = false;
+            }
+
+            return routeStarted;
         }
 
         private bool TryRouteToFailureTerminalScene()
@@ -3982,7 +4212,14 @@ namespace Game.Core
 
             _hasRoutedAfterFailure = true;
             _isRunPhaseSceneRouting = true;
-            return TryLoadSceneAuthoritatively(MenuSceneName);
+            bool routeStarted = TryLoadSceneAuthoritatively(MenuSceneName);
+            if (!routeStarted)
+            {
+                _hasRoutedAfterFailure = false;
+                _isRunPhaseSceneRouting = false;
+            }
+
+            return routeStarted;
         }
 
         private bool TryLoadSceneAuthoritatively(string targetSceneName)
