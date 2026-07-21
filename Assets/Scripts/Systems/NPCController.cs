@@ -161,7 +161,12 @@ namespace Game.Systems
         private ulong _lastIssuedCatchToken;
         private string _lastCatchOwnerKey = PlayerContextRegistry.DefaultLocalPlayerId;
         private float _lastCatchServerTime;
-        private bool _isCrossingLink = false;
+        private readonly OffMeshLinkTraversalSession _offMeshLinkTraversal = new OffMeshLinkTraversalSession();
+        private readonly HashSet<OffMeshLinkTraversalFailure> _loggedTraversalFailures =
+            new HashSet<OffMeshLinkTraversalFailure>();
+        private Coroutine _offMeshLinkTraversalRoutine;
+        private bool _agentWasStoppedBeforeTraversal;
+        private bool _isDestroying;
         private int _ownerCatchStateDay = -1;
 
         private readonly Dictionary<string, NpcCatchStateRuntime> _ownerCatchStates =
@@ -236,6 +241,7 @@ namespace Game.Systems
             {
                 _agent.stoppingDistance = Mathf.Max(0f, stoppingDistance);
                 _agent.autoBraking = true;
+                ConfigureManualOffMeshLinkTraversal();
             }
 
             TryAutoAssignReferences();
@@ -267,20 +273,30 @@ namespace Game.Systems
 
         private void OnEnable()
         {
+            _isDestroying = false;
+            ConfigureManualOffMeshLinkTraversal();
             EventBus.Subscribe<MinigameEndedEvent>(OnMinigameEnded);
             EventBus.Subscribe<MinigameCancelledEvent>(OnMinigameCancelled);
         }
 
         private void OnDisable()
         {
+            CancelOffMeshLinkTraversal();
             EventBus.Unsubscribe<MinigameEndedEvent>(OnMinigameEnded);
             EventBus.Unsubscribe<MinigameCancelledEvent>(OnMinigameCancelled);
+        }
+
+        private void OnDestroy()
+        {
+            _isDestroying = true;
+            CancelOffMeshLinkTraversal();
         }
 
         private void Update()
         {
             if (!CanRunAuthoritativeUpdate())
             {
+                CancelOffMeshLinkTraversal();
                 StopAgent();
                 return;
             }
@@ -305,9 +321,13 @@ namespace Game.Systems
                 return;
             }
 
-            if (_agent.isOnOffMeshLink && !_isCrossingLink)
+            if (_offMeshLinkTraversal.IsActive)
             {
-                StartCoroutine(CrossDoorLink());
+                return;
+            }
+
+            if (TryStartOffMeshLinkTraversal())
+            {
                 return;
             }
 
@@ -325,27 +345,241 @@ namespace Game.Systems
             }
         }
 
-        private IEnumerator CrossDoorLink()
+        private bool TryStartOffMeshLinkTraversal()
         {
-            _isCrossingLink = true;
-
-            _agent.autoTraverseOffMeshLink = false;
-            OffMeshLinkData data = _agent.currentOffMeshLinkData;
-            Vector3 start = _agent.transform.position;
-            Vector3 end = data.endPos;
-
-            float duration = Vector3.Distance(start, end) / _agent.speed;
-            float t = 0f;
-
-            while (t < 1f)
+            if (_agent == null || !_agent.enabled || !_agent.isOnNavMesh || !_agent.isOnOffMeshLink)
             {
-                t += Time.deltaTime / duration;
-                _agent.transform.position = Vector3.Lerp(start, end, t);
+                return false;
+            }
+
+            OffMeshLinkData linkData = _agent.currentOffMeshLinkData;
+            OffMeshLinkTraversalSnapshot snapshot = new OffMeshLinkTraversalSnapshot(
+                isActiveAndEnabled && !_isDestroying,
+                _agent != null,
+                _agent.enabled,
+                _agent.isOnNavMesh,
+                _agent.isOnOffMeshLink,
+                linkData.valid,
+                DoesCurrentStateAllowMovement(),
+                CanRunAuthoritativeUpdate(),
+                _agent.transform.position,
+                linkData.startPos,
+                linkData.endPos);
+
+            if (!OffMeshLinkTraversalRules.TryValidateStart(
+                    snapshot,
+                    _offMeshLinkTraversal.IsActive,
+                    out Vector3 destination,
+                    out OffMeshLinkTraversalFailure failure))
+            {
+                LogTraversalFailureOnce(failure);
+                return false;
+            }
+
+            Vector3 start = _agent.transform.position;
+            float distance = Vector3.Distance(start, destination);
+            if (!OffMeshLinkTraversalRules.TryCalculateDuration(distance, _agent.speed, out float duration))
+            {
+                LogTraversalFailureOnce(
+                    OffMeshLinkTraversalRules.IsFinite(distance)
+                        ? OffMeshLinkTraversalFailure.DegenerateLink
+                        : OffMeshLinkTraversalFailure.InvalidEndpoint);
+                return false;
+            }
+
+            if (!_offMeshLinkTraversal.TryBegin(out uint token))
+            {
+                return false;
+            }
+
+            _agentWasStoppedBeforeTraversal = _agent.isStopped;
+            _agent.isStopped = true;
+            if (!_offMeshLinkTraversal.TryMarkTraversing(token))
+            {
+                CancelOffMeshLinkTraversal();
+                return false;
+            }
+
+            _offMeshLinkTraversalRoutine = StartCoroutine(
+                TraverseOffMeshLink(token, start, destination, duration));
+            return true;
+        }
+
+        private IEnumerator TraverseOffMeshLink(uint token, Vector3 start, Vector3 end, float duration)
+        {
+            float elapsed = 0f;
+            while (elapsed < duration)
+            {
+                if (!CanContinueOffMeshLinkTraversal(token))
+                {
+                    CancelOffMeshLinkTraversal(stopCoroutine: false);
+                    yield break;
+                }
+
+                float deltaTime = Time.deltaTime;
+                if (OffMeshLinkTraversalRules.IsFinite(deltaTime) && deltaTime > 0f)
+                {
+                    elapsed = Mathf.Min(duration, elapsed + deltaTime);
+                }
+
+                float progress = Mathf.Clamp01(elapsed / duration);
+                Vector3 position = Vector3.Lerp(start, end, progress);
+                if (!OffMeshLinkTraversalRules.IsFinite(position))
+                {
+                    LogTraversalFailureOnce(OffMeshLinkTraversalFailure.InvalidEndpoint);
+                    CancelOffMeshLinkTraversal(stopCoroutine: false);
+                    yield break;
+                }
+
+                _agent.transform.position = position;
                 yield return null;
             }
 
+            if (!CanContinueOffMeshLinkTraversal(token)
+                || !_offMeshLinkTraversal.TryBeginCompletion(token)
+                || !OffMeshLinkTraversalRules.CanComplete(CreateCompletionSnapshot()))
+            {
+                CancelOffMeshLinkTraversal(stopCoroutine: false);
+                yield break;
+            }
+
+            _agent.transform.position = end;
+            if (!_offMeshLinkTraversal.IsCurrent(token)
+                || !OffMeshLinkTraversalRules.CanComplete(CreateCompletionSnapshot()))
+            {
+                CancelOffMeshLinkTraversal(stopCoroutine: false);
+                yield break;
+            }
+
             _agent.CompleteOffMeshLink();
-            _isCrossingLink = false;
+            if (!_offMeshLinkTraversal.TryComplete(token))
+            {
+                CancelOffMeshLinkTraversal(stopCoroutine: false);
+                yield break;
+            }
+
+            _offMeshLinkTraversalRoutine = null;
+            RestoreAgentAfterOffMeshLinkTraversal();
+        }
+
+        private bool CanContinueOffMeshLinkTraversal(uint token)
+        {
+            return _offMeshLinkTraversal.IsCurrent(token)
+                   && OffMeshLinkTraversalRules.CanComplete(CreateCompletionSnapshot())
+                   && IsCurrentOffMeshLinkStillValid()
+                   && DoesCurrentStateAllowMovement();
+        }
+
+        private bool IsCurrentOffMeshLinkStillValid()
+        {
+            if (_agent == null || !_agent.enabled || !_agent.isOnNavMesh || !_agent.isOnOffMeshLink)
+            {
+                return false;
+            }
+
+            OffMeshLinkData linkData = _agent.currentOffMeshLinkData;
+            float linkDistance = Vector3.Distance(linkData.startPos, linkData.endPos);
+            bool isValid = linkData.valid
+                           && OffMeshLinkTraversalRules.IsFinite(linkData.startPos)
+                           && OffMeshLinkTraversalRules.IsFinite(linkData.endPos)
+                           && OffMeshLinkTraversalRules.IsFinite(linkDistance)
+                           && linkDistance >= OffMeshLinkTraversalRules.MinimumLinkDistance;
+            if (!isValid)
+            {
+                LogTraversalFailureOnce(
+                    linkData.valid
+                        ? OffMeshLinkTraversalFailure.InvalidEndpoint
+                        : OffMeshLinkTraversalFailure.InvalidLinkData);
+            }
+
+            return isValid;
+        }
+
+        private OffMeshLinkCompletionSnapshot CreateCompletionSnapshot()
+        {
+            bool agentExists = _agent != null;
+            bool agentEnabled = agentExists && _agent.enabled;
+            bool agentOnNavMesh = agentEnabled && _agent.isOnNavMesh;
+            bool agentOnOffMeshLink = agentOnNavMesh && _agent.isOnOffMeshLink;
+            return new OffMeshLinkCompletionSnapshot(
+                isActiveAndEnabled && !_isDestroying,
+                agentExists,
+                agentEnabled,
+                agentOnNavMesh,
+                agentOnOffMeshLink,
+                CanRunAuthoritativeUpdate());
+        }
+
+        private void CancelOffMeshLinkTraversal(bool stopCoroutine = true)
+        {
+            Coroutine routine = _offMeshLinkTraversalRoutine;
+            _offMeshLinkTraversalRoutine = null;
+            bool cancelled = _offMeshLinkTraversal.Cancel();
+
+            if (stopCoroutine && routine != null)
+            {
+                StopCoroutine(routine);
+            }
+
+            if (cancelled || routine != null)
+            {
+                RestoreAgentAfterOffMeshLinkTraversal();
+            }
+        }
+
+        private void RestoreAgentAfterOffMeshLinkTraversal()
+        {
+            if (_agent == null || !_agent.enabled || !_agent.gameObject.activeInHierarchy || !_agent.isOnNavMesh)
+            {
+                return;
+            }
+
+            bool movementCanResume = !_isDestroying
+                                     && isActiveAndEnabled
+                                     && CanRunAuthoritativeUpdate()
+                                     && DoesCurrentStateAllowMovement();
+            _agent.isStopped = movementCanResume ? _agentWasStoppedBeforeTraversal : true;
+        }
+
+        private void ConfigureManualOffMeshLinkTraversal()
+        {
+            if (_agent != null)
+            {
+                _agent.autoTraverseOffMeshLink = false;
+            }
+        }
+
+        private bool DoesCurrentStateAllowMovement()
+        {
+            if (_isPostLieFailAlertActive || _awaitingMinigameEnd)
+            {
+                return false;
+            }
+
+            return _state == NPCState.Roaming || _state == NPCState.Chasing;
+        }
+
+        internal void HandleMovementAuthorityChanged(bool hasMovementAuthority)
+        {
+            if (!hasMovementAuthority)
+            {
+                CancelOffMeshLinkTraversal();
+                return;
+            }
+
+            ConfigureManualOffMeshLinkTraversal();
+        }
+
+        [System.Diagnostics.Conditional("UNITY_EDITOR")]
+        [System.Diagnostics.Conditional("DEVELOPMENT_BUILD")]
+        private void LogTraversalFailureOnce(OffMeshLinkTraversalFailure failure)
+        {
+            if (failure == OffMeshLinkTraversalFailure.None || !_loggedTraversalFailures.Add(failure))
+            {
+                return;
+            }
+
+            Debug.LogWarning($"[NPCController] OffMeshLink traversal rejected: {failure}.", this);
         }
 
         private void HandleIdle()
@@ -1038,6 +1272,7 @@ namespace Game.Systems
 
         public void ResetAfterMinigame()
         {
+            CancelOffMeshLinkTraversal();
             hasCaughtPlayer = false;
             triggeredMinigame = false;
             _awaitingMinigameEnd = false;
@@ -1163,6 +1398,7 @@ namespace Game.Systems
 
         private void StartPostLieFailSequence()
         {
+            CancelOffMeshLinkTraversal();
             triggeredMinigame = false;
             hasCaughtPlayer = false;
             _awaitingMinigameEnd = false;
@@ -1800,6 +2036,11 @@ namespace Game.Systems
 
         private void TryPickRoamTarget()
         {
+            if (_offMeshLinkTraversal.IsActive)
+            {
+                return;
+            }
+
             if (!EnsureAgentOnNavMesh())
             {
                 _hasRoamTarget = false;
@@ -1890,11 +2131,21 @@ namespace Game.Systems
         {
             if (_state == nextState)
             {
+                if (nextState == NPCState.Idle)
+                {
+                    CancelOffMeshLinkTraversal();
+                }
+
                 return;
             }
 
             NPCState previous = _state;
             _state = nextState;
+
+            if (!DoesCurrentStateAllowMovement())
+            {
+                CancelOffMeshLinkTraversal();
+            }
 
             if (previous == NPCState.Chasing || _state == NPCState.Chasing)
             {
@@ -1921,7 +2172,7 @@ namespace Game.Systems
 
         private bool EnsureAgentOnNavMesh()
         {
-            if (_agent == null)
+            if (_agent == null || !_agent.enabled || !_agent.gameObject.activeInHierarchy)
             {
                 return false;
             }
@@ -1943,6 +2194,11 @@ namespace Game.Systems
 
         private void SetAgentDestination(Vector3 destination, string reason)
         {
+            if (_offMeshLinkTraversal.IsActive)
+            {
+                return;
+            }
+
             if (!EnsureAgentOnNavMesh())
             {
                 return;
@@ -1969,6 +2225,11 @@ namespace Game.Systems
 
         private bool HasReachedDestination()
         {
+            if (_offMeshLinkTraversal.IsActive)
+            {
+                return false;
+            }
+
             if (!EnsureAgentOnNavMesh())
             {
                 return true;
@@ -1995,13 +2256,17 @@ namespace Game.Systems
 
         private void StopAgent()
         {
-            if (_agent == null)
+            if (_offMeshLinkTraversal.IsActive
+                || _agent == null
+                || !_agent.enabled
+                || !_agent.gameObject.activeInHierarchy
+                || !_agent.isOnNavMesh)
             {
                 return;
             }
 
             _agent.isStopped = true;
-            if (_agent.isOnNavMesh)
+            if (!_agent.isOnOffMeshLink)
             {
                 _agent.ResetPath();
             }
@@ -2035,7 +2300,7 @@ namespace Game.Systems
 
         private bool ShouldRefreshRoamDestination()
         {
-            if (_agent == null)
+            if (_offMeshLinkTraversal.IsActive || _agent == null)
             {
                 return false;
             }

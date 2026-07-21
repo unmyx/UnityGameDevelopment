@@ -41,6 +41,8 @@ namespace Game.Networking
 
         private NPCController _npcController;
         private NavMeshAgent _navMeshAgent;
+        private bool _hasAppliedAuthorityState;
+        private bool _wasAuthoritative;
 
         public NPCController.NPCState ReplicatedState => (NPCController.NPCState)_state.Value;
         public ulong ReplicatedTargetClientId => _targetClientId.Value;
@@ -61,16 +63,24 @@ namespace Game.Networking
 
         public override void OnNetworkDespawn()
         {
-            // If networking stops, fallback to offline behavior.
             if (_npcController != null)
             {
-                _npcController.enabled = true;
+                _npcController.HandleMovementAuthorityChanged(false);
             }
 
+            // If networking stops, fallback to offline behavior.
             if (_navMeshAgent != null)
             {
                 _navMeshAgent.enabled = true;
             }
+
+            if (_npcController != null)
+            {
+                _npcController.enabled = true;
+                _npcController.HandleMovementAuthorityChanged(true);
+            }
+
+            _hasAppliedAuthorityState = false;
         }
 
         private void Update()
@@ -84,16 +94,44 @@ namespace Game.Networking
             NetworkManager manager = NetworkManager.Singleton;
             bool isNetworkSession = manager != null && manager.IsListening;
             bool shouldDriveAuthoritative = !isNetworkSession || IsServer;
+            bool authorityChanged = !_hasAppliedAuthorityState || _wasAuthoritative != shouldDriveAuthoritative;
 
-            if (_npcController != null && _npcController.enabled != shouldDriveAuthoritative)
+            if (!shouldDriveAuthoritative)
             {
-                _npcController.enabled = shouldDriveAuthoritative;
+                if (authorityChanged && _npcController != null)
+                {
+                    _npcController.HandleMovementAuthorityChanged(false);
+                }
+
+                if (_npcController != null)
+                {
+                    _npcController.enabled = false;
+                }
+
+                if (_navMeshAgent != null)
+                {
+                    _navMeshAgent.enabled = false;
+                }
+            }
+            else
+            {
+                if (_navMeshAgent != null)
+                {
+                    _navMeshAgent.enabled = true;
+                }
+
+                if (_npcController != null)
+                {
+                    _npcController.enabled = true;
+                    if (authorityChanged)
+                    {
+                        _npcController.HandleMovementAuthorityChanged(true);
+                    }
+                }
             }
 
-            if (_navMeshAgent != null && _navMeshAgent.enabled != shouldDriveAuthoritative)
-            {
-                _navMeshAgent.enabled = shouldDriveAuthoritative;
-            }
+            _wasAuthoritative = shouldDriveAuthoritative;
+            _hasAppliedAuthorityState = true;
         }
 
         private void PushServerState()
