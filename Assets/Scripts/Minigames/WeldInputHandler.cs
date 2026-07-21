@@ -7,10 +7,12 @@ namespace Game.Minigames
     internal sealed class WeldInputHandler
     {
         private InputAction _paintAction;
+        private InputAction _radiusScrollAction;
 
-        public void CachePaintAction()
+        public void CacheActions()
         {
             _paintAction = null;
+            _radiusScrollAction = null;
 
             if (InputManager.Instance == null)
             {
@@ -30,11 +32,27 @@ namespace Game.Minigames
             }
 
             _paintAction = playerMap.FindAction("Attack");
+
+            InputActionMap uiMap = inputAsset.FindActionMap("UI");
+            if (uiMap != null)
+            {
+                _radiusScrollAction = uiMap.FindAction("ScrollWheel");
+            }
         }
 
         public bool IsPaintHeld()
         {
             return _paintAction != null && _paintAction.IsPressed();
+        }
+
+        public float GetRadiusScrollDeltaY()
+        {
+            if (_radiusScrollAction == null)
+            {
+                return 0f;
+            }
+
+            return _radiusScrollAction.ReadValue<Vector2>().y;
         }
 
         public bool TryGetLocalPointerPosition(RectTransform areaRect, Camera uiCamera, out Vector2 localPoint)
@@ -62,6 +80,7 @@ namespace Game.Minigames
         public void Clear()
         {
             _paintAction = null;
+            _radiusScrollAction = null;
         }
     }
 }

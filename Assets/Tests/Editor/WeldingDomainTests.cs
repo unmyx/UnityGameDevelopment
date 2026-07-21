@@ -58,4 +58,100 @@ public class WeldingDomainTests
         Assert.That(session.ActiveTool, Is.EqualTo(ToolType.CO2));
         Assert.That(WeldingToolRules.GetDefinition(session.ActiveTool).InitialRadius, Is.EqualTo(0.07f));
     }
+
+    [TestCase(ToolType.Electric, 0.04f)]
+    [TestCase(ToolType.CO2, 0.07f)]
+    public void RadiusSession_StartsAtToolInitialRadius(ToolType toolType, float expectedRadius)
+    {
+        WeldingRadiusController radius = new WeldingRadiusController();
+
+        Assert.That(radius.BeginSession(WeldingToolRules.GetDefinition(toolType)), Is.True);
+        Assert.That(radius.CurrentRadius, Is.EqualTo(expectedRadius).Within(0.0001f));
+    }
+
+    [Test]
+    public void RadiusIncrease_UsesExactlyOneStep()
+    {
+        WeldingToolDefinition definition = WeldingToolRules.GetDefinition(ToolType.Electric);
+        WeldingRadiusController radius = new WeldingRadiusController();
+        radius.BeginSession(definition);
+
+        Assert.That(radius.TryApplyScroll(120f, 1), Is.True);
+        Assert.That(radius.CurrentRadius, Is.EqualTo(definition.InitialRadius + definition.RadiusStep).Within(0.0001f));
+    }
+
+    [Test]
+    public void RadiusDecrease_UsesExactlyOneStep()
+    {
+        WeldingToolDefinition definition = WeldingToolRules.GetDefinition(ToolType.CO2);
+        WeldingRadiusController radius = new WeldingRadiusController();
+        radius.BeginSession(definition);
+
+        Assert.That(radius.TryApplyScroll(-120f, 1), Is.True);
+        Assert.That(radius.CurrentRadius, Is.EqualTo(definition.InitialRadius - definition.RadiusStep).Within(0.0001f));
+    }
+
+    [Test]
+    public void Radius_IsClampedToToolBounds()
+    {
+        WeldingToolDefinition definition = WeldingToolRules.GetDefinition(ToolType.Electric);
+        WeldingRadiusController radius = new WeldingRadiusController();
+        radius.BeginSession(definition);
+
+        for (int frame = 0; frame < 100; frame++) radius.TryApplyScroll(1f, frame);
+        Assert.That(radius.CurrentRadius, Is.EqualTo(definition.MaximumRadius).Within(0.0001f));
+        for (int frame = 100; frame < 200; frame++) radius.TryApplyScroll(-1f, frame);
+        Assert.That(radius.CurrentRadius, Is.EqualTo(definition.MinimumRadius).Within(0.0001f));
+    }
+
+    [Test]
+    public void RadiusInput_AfterTerminalStateHasNoEffect()
+    {
+        WeldingRadiusController radius = new WeldingRadiusController();
+        radius.BeginSession(WeldingToolRules.GetDefinition(ToolType.Electric));
+        radius.EndSession();
+
+        Assert.That(radius.TryApplyScroll(1f, 2), Is.False);
+        Assert.That(radius.CurrentRadius, Is.Zero);
+    }
+
+    [Test]
+    public void RadiusRestart_UsesNewToolInitialRadius()
+    {
+        WeldingRadiusController radius = new WeldingRadiusController();
+        radius.BeginSession(WeldingToolRules.GetDefinition(ToolType.Electric));
+        radius.TryApplyScroll(1f, 1);
+        radius.EndSession();
+
+        radius.BeginSession(WeldingToolRules.GetDefinition(ToolType.CO2));
+
+        Assert.That(radius.CurrentRadius, Is.EqualTo(0.07f).Within(0.0001f));
+    }
+
+    [Test]
+    public void MultipleRadiusCallbacksInSameFrame_ApplyAtMostOneStep()
+    {
+        WeldingToolDefinition definition = WeldingToolRules.GetDefinition(ToolType.CO2);
+        WeldingRadiusController radius = new WeldingRadiusController();
+        radius.BeginSession(definition);
+
+        Assert.That(radius.TryApplyScroll(1f, 10), Is.True);
+        Assert.That(radius.TryApplyScroll(1f, 10), Is.False);
+        Assert.That(radius.TryApplyScroll(-1f, 10), Is.False);
+        Assert.That(radius.CurrentRadius, Is.EqualTo(definition.InitialRadius + definition.RadiusStep).Within(0.0001f));
+    }
+
+    [TestCase(float.NaN)]
+    [TestCase(float.PositiveInfinity)]
+    [TestCase(float.NegativeInfinity)]
+    public void InvalidScrollInput_DoesNotCorruptRadius(float scrollDelta)
+    {
+        WeldingRadiusController radius = new WeldingRadiusController();
+        radius.BeginSession(WeldingToolRules.GetDefinition(ToolType.Electric));
+
+        Assert.That(radius.TryApplyScroll(scrollDelta, 1), Is.False);
+        Assert.That(float.IsNaN(radius.CurrentRadius), Is.False);
+        Assert.That(float.IsInfinity(radius.CurrentRadius), Is.False);
+        Assert.That(radius.CurrentRadius, Is.GreaterThan(0f));
+    }
 }

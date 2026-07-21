@@ -103,8 +103,8 @@ namespace Game.Minigames
         private bool _hasLoggedCameraFallbackWarning;
         private Coroutine _cameraTransitionRoutine;
         private readonly MinigameToolSession _toolSession = new MinigameToolSession();
+        private readonly WeldingRadiusController _radiusController = new WeldingRadiusController();
         private WeldingToolDefinition _toolDefinition;
-        private float _currentTraceRadius01;
 
         public ToolType ActiveTool => _toolSession.ActiveTool;
 
@@ -131,7 +131,11 @@ namespace Game.Minigames
                 return;
             }
 
-            _currentTraceRadius01 = _toolDefinition.InitialRadius;
+            if (!_radiusController.BeginSession(_toolDefinition))
+            {
+                FailSetup("The welding radius could not be initialized from the tool definition.");
+                return;
+            }
 
             if (_minigameCanvas == null)
             {
@@ -218,7 +222,7 @@ namespace Game.Minigames
                 AcquireMinigameCursorAuthority();
             }
 
-            _inputHandler.CachePaintAction();
+            _inputHandler.CacheActions();
             _remainingTimeSeconds = _timeLimitSeconds;
             _hasProcessedTimeoutFailure = false;
             _lastOverallCoverage = -1f;
@@ -254,6 +258,7 @@ namespace Game.Minigames
                 return;
             }
 
+            UpdateRadiusInput();
             UpdateWorldAnchorTargets();
             if (AreAllWorldAnchorsComplete())
             {
@@ -292,7 +297,7 @@ namespace Game.Minigames
             _isReturningToGameplayView = false;
             _pendingResult = MinigameResult.None;
             _setupFailureReason = string.Empty;
-            _currentTraceRadius01 = 0f;
+            _radiusController.EndSession();
             _toolDefinition = default;
             _toolSession.Clear();
         }
@@ -666,15 +671,29 @@ namespace Game.Minigames
 
         private float GetWorldTraceRadius01()
         {
-            if (!_toolDefinition.IsValid)
+            if (!_toolDefinition.IsValid || !_radiusController.IsSessionActive)
             {
                 return 0f;
             }
 
             return Mathf.Clamp(
-                _currentTraceRadius01,
+                _radiusController.CurrentRadius,
                 _toolDefinition.MinimumRadius,
                 _toolDefinition.MaximumRadius);
+        }
+
+        private void UpdateRadiusInput()
+        {
+            if (_isFinishing || !_radiusController.IsSessionActive)
+            {
+                return;
+            }
+
+            float scrollDeltaY = _inputHandler.GetRadiusScrollDeltaY();
+            if (_radiusController.TryApplyScroll(scrollDeltaY, Time.frameCount))
+            {
+                UpdateWorldAnchorCoverageUi(force: true);
+            }
         }
 
         private void UpdateWorldAnchorMarkerVisuals(WeldAnchorState targetedAnchor, float targetedSeamT, bool paintHeld)
@@ -918,7 +937,7 @@ namespace Game.Minigames
             _lastOverallCoverage = overallCoverage;
             if (_coverageText != null)
             {
-                _coverageText.text = $"Welds: {completeCount}/{_activeWorldAnchors.Count}";
+                _coverageText.text = $"{ActiveTool}  Radius: {GetWorldTraceRadius01():0.000}  Welds: {completeCount}/{_activeWorldAnchors.Count}";
             }
 
             if (_coverageFillImage != null)
@@ -974,6 +993,7 @@ namespace Game.Minigames
 
             _isFinishing = true;
             _pendingResult = result;
+            _radiusController.EndSession();
 
             if (_minigameCanvas != null)
             {

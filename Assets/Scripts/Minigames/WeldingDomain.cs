@@ -76,4 +76,60 @@ namespace Game.Minigames
                 : default;
         }
     }
+
+    public sealed class WeldingRadiusController
+    {
+        private WeldingToolDefinition _definition;
+        private int _lastInputFrame = int.MinValue;
+
+        public float CurrentRadius { get; private set; }
+        public bool IsSessionActive { get; private set; }
+
+        public bool BeginSession(WeldingToolDefinition definition)
+        {
+            EndSession();
+            if (!definition.IsValid)
+            {
+                return false;
+            }
+
+            _definition = definition;
+            CurrentRadius = definition.InitialRadius;
+            IsSessionActive = true;
+            return true;
+        }
+
+        public bool TryApplyScroll(float scrollDeltaY, int frameId)
+        {
+            if (!IsSessionActive
+                || !float.IsFinite(scrollDeltaY)
+                || Mathf.Approximately(scrollDeltaY, 0f)
+                || _lastInputFrame == frameId)
+            {
+                return false;
+            }
+
+            _lastInputFrame = frameId;
+            float direction = scrollDeltaY > 0f ? 1f : -1f;
+            float adjusted = Mathf.Clamp(
+                CurrentRadius + (_definition.RadiusStep * direction),
+                _definition.MinimumRadius,
+                _definition.MaximumRadius);
+            if (Mathf.Approximately(adjusted, CurrentRadius))
+            {
+                return false;
+            }
+
+            CurrentRadius = adjusted;
+            return true;
+        }
+
+        public void EndSession()
+        {
+            _definition = default;
+            CurrentRadius = 0f;
+            IsSessionActive = false;
+            _lastInputFrame = int.MinValue;
+        }
+    }
 }
