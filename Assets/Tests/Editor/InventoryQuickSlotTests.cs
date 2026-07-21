@@ -368,6 +368,101 @@ public class InventoryQuickSlotTests
         Assert.That(session.ActiveTool, Is.EqualTo(ToolType.Electric));
     }
 
+    [TestCase(0)]
+    [TestCase(1)]
+    [TestCase(2)]
+    public void LegacyInventoryUpgradeTier_DoesNotLimitNineAvailableSlots(int legacyTier)
+    {
+        GameManager gameManager = CreateInactiveGameManager(out GameObject gameManagerObject);
+        try
+        {
+            if (legacyTier > 0)
+            {
+                gameManager.RestoreOwnedToolUpgradesFromSave(new List<ToolDataEntry>
+                {
+                    new ToolDataEntry(GameManager.UpgradeIdInventoryQuickSlots, legacyTier)
+                });
+            }
+
+            Assert.That(gameManager.GetUnlockedQuickSlots(), Is.EqualTo(InventoryQuickSlotRules.MaxQuickSlots));
+        }
+        finally
+        {
+            Object.DestroyImmediate(gameManagerObject);
+        }
+    }
+
+    [Test]
+    public void LegacyInventoryUpgradeTier_IsPreservedForSaveCompatibility()
+    {
+        GameManager gameManager = CreateInactiveGameManager(out GameObject gameManagerObject);
+        try
+        {
+            gameManager.RestoreOwnedToolUpgradesFromSave(new List<ToolDataEntry>
+            {
+                new ToolDataEntry(GameManager.UpgradeIdInventoryQuickSlots, 2)
+            });
+
+            List<ToolDataEntry> savedUpgrades = gameManager.GetOwnedToolUpgradesForSave();
+            ToolDataEntry inventoryEntry = savedUpgrades.Find(
+                entry => entry.toolId == GameManager.UpgradeIdInventoryQuickSlots);
+            Assert.That(inventoryEntry, Is.Not.Null);
+            Assert.That(inventoryEntry.tier, Is.EqualTo(2));
+        }
+        finally
+        {
+            Object.DestroyImmediate(gameManagerObject);
+        }
+    }
+
+    [Test]
+    public void ObsoleteInventoryCapacityUpgrade_CannotBePurchasedOrSpendCurrency()
+    {
+        GameManager gameManager = CreateInactiveGameManager(out GameObject gameManagerObject);
+        try
+        {
+            gameManager.RestoreCurrencyFromSave(1000);
+            int currencyBefore = gameManager.GetCurrency();
+
+            bool purchased = gameManager.TryPurchaseUpgradeInHome(
+                GameManager.UpgradeIdInventoryQuickSlots,
+                out int spentCurrency,
+                out int resultingTier);
+
+            Assert.That(purchased, Is.False);
+            Assert.That(spentCurrency, Is.Zero);
+            Assert.That(resultingTier, Is.Zero);
+            Assert.That(gameManager.GetCurrency(), Is.EqualTo(currencyBefore));
+        }
+        finally
+        {
+            Object.DestroyImmediate(gameManagerObject);
+        }
+    }
+
+    [Test]
+    public void InventoryUpgradeStatus_ReportsNineOfNineAndNoPurchase()
+    {
+        GameManager gameManager = CreateInactiveGameManager(out GameObject gameManagerObject);
+        try
+        {
+            List<GameManager.HomeUpgradeStatusData> statuses = gameManager.GetHomeUpgradeStatusEntries();
+            GameManager.HomeUpgradeStatusData inventoryStatus = statuses.Find(
+                status => status.upgradeId == GameManager.UpgradeIdInventoryQuickSlots);
+
+            Assert.That(inventoryStatus, Is.Not.Null);
+            Assert.That(inventoryStatus.canPurchase, Is.False);
+            Assert.That(inventoryStatus.nextTierCost, Is.EqualTo(-1));
+            Assert.That(inventoryStatus.unavailableReason, Does.Contain("9"));
+            Assert.That(inventoryStatus.detailTextOverride, Does.Contain("9/9"));
+            Assert.That(inventoryStatus.actionLabelOverride, Is.EqualTo("Maxed"));
+        }
+        finally
+        {
+            Object.DestroyImmediate(gameManagerObject);
+        }
+    }
+
     private void FillAllQuickSlots()
     {
         for (int i = 0; i < InventoryQuickSlotRules.MaxQuickSlots; i++)
@@ -447,5 +542,12 @@ public class InventoryQuickSlotTests
         FieldInfo field = typeof(InventorySystem).GetField("_instance", BindingFlags.Static | BindingFlags.NonPublic);
         Assert.That(field, Is.Not.Null);
         field.SetValue(null, null);
+    }
+
+    private static GameManager CreateInactiveGameManager(out GameObject gameManagerObject)
+    {
+        gameManagerObject = new GameObject("InventoryQuickSlotTests.GameManager");
+        gameManagerObject.SetActive(false);
+        return gameManagerObject.AddComponent<GameManager>();
     }
 }

@@ -211,13 +211,20 @@ namespace Game.Minigames
 
                 if (row.DetailText != null)
                 {
-                    string costText = status.currentTier >= status.maxTier
-                        ? "Cost: MAX"
-                        : $"Cost: ${Mathf.Max(0, status.nextTierCost)}";
-                    string reasonText = string.IsNullOrWhiteSpace(status.unavailableReason)
-                        ? string.Empty
-                        : $"  |  {status.unavailableReason}";
-                    row.DetailText.text = $"Tier: {status.currentTier}/{status.maxTier}  |  {costText}{reasonText}";
+                    if (!string.IsNullOrWhiteSpace(status.detailTextOverride))
+                    {
+                        row.DetailText.text = status.detailTextOverride.Trim();
+                    }
+                    else
+                    {
+                        string costText = status.currentTier >= status.maxTier
+                            ? "Cost: MAX"
+                            : $"Cost: ${Mathf.Max(0, status.nextTierCost)}";
+                        string reasonText = string.IsNullOrWhiteSpace(status.unavailableReason)
+                            ? string.Empty
+                            : $"  |  {status.unavailableReason}";
+                        row.DetailText.text = $"Tier: {status.currentTier}/{status.maxTier}  |  {costText}{reasonText}";
+                    }
                 }
 
                 if (row.ActionButton != null)
@@ -227,7 +234,11 @@ namespace Game.Minigames
 
                 if (row.ActionLabel != null)
                 {
-                    if (status.currentTier >= status.maxTier)
+                    if (!string.IsNullOrWhiteSpace(status.actionLabelOverride))
+                    {
+                        row.ActionLabel.text = status.actionLabelOverride.Trim();
+                    }
+                    else if (status.currentTier >= status.maxTier)
                     {
                         row.ActionLabel.text = "Maxed";
                     }

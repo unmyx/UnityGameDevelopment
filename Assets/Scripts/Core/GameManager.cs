@@ -96,6 +96,8 @@ namespace Game.Core
             public int nextTierCost;
             public bool canPurchase;
             public string unavailableReason;
+            public string detailTextOverride;
+            public string actionLabelOverride;
         }
 
         private const string DailyTaskTypeCleaning = "cleaning";
@@ -1115,6 +1117,11 @@ namespace Game.Core
 
             string normalizedUpgradeId = NormalizeUpgradeId(upgradeId);
             resultingTier = GetOwnedUpgradeTier(normalizedUpgradeId);
+
+            if (string.Equals(normalizedUpgradeId, UpgradeIdInventoryQuickSlots, StringComparison.Ordinal))
+            {
+                return false;
+            }
 
             if (_runFailed || _currentRunPhase != RunPhase.Home)
             {
@@ -3691,6 +3698,22 @@ namespace Game.Core
             if (string.IsNullOrEmpty(normalizedUpgradeId))
             {
                 return null;
+            }
+
+            if (string.Equals(normalizedUpgradeId, UpgradeIdInventoryQuickSlots, StringComparison.Ordinal))
+            {
+                return new HomeUpgradeStatusData
+                {
+                    upgradeId = normalizedUpgradeId,
+                    displayName = "Inventory Slots",
+                    currentTier = GetOwnedUpgradeTier(normalizedUpgradeId),
+                    maxTier = GetMaxUpgradeTier(normalizedUpgradeId),
+                    nextTierCost = -1,
+                    canPurchase = false,
+                    unavailableReason = $"All {InventoryQuickSlotRules.MaxQuickSlots} slots available.",
+                    detailTextOverride = $"Slots: {InventoryQuickSlotRules.MaxQuickSlots}/{InventoryQuickSlotRules.MaxQuickSlots}  |  All slots available",
+                    actionLabelOverride = "Maxed"
+                };
             }
 
             int maxTier = GetMaxUpgradeTier(normalizedUpgradeId);
