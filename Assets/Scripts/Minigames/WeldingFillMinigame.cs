@@ -80,8 +80,6 @@ namespace Game.Minigames
         [SerializeField] private float _worldStallGraceSeconds = 0.28f;
         [SerializeField, Range(0f, 1f)] private float _worldStallEfficiency = 0f;
         [SerializeField] private float _worldFastGapSpacingMultiplier = 1.6f;
-        [SerializeField, Range(0.012f, 0.2f)] private float _worldTraceRadius01 = 0.051f;
-
         private Camera _gameplayViewCamera;
         private Camera _worldViewCamera;
         private FirstPersonCamera _firstPersonCamera;
@@ -105,12 +103,14 @@ namespace Game.Minigames
         private bool _hasLoggedCameraFallbackWarning;
         private Coroutine _cameraTransitionRoutine;
         private readonly MinigameToolSession _toolSession = new MinigameToolSession();
+        private WeldingToolDefinition _toolDefinition;
+        private float _currentTraceRadius01;
 
         public ToolType ActiveTool => _toolSession.ActiveTool;
 
         public static bool SupportsTool(ToolType toolType)
         {
-            return toolType == ToolType.Electric || toolType == ToolType.CO2;
+            return WeldingToolRules.TryGetDefinition(toolType, out _);
         }
 
         protected override void OnInitialize()
@@ -124,6 +124,14 @@ namespace Game.Minigames
                 FailSetup("A compatible welding tool snapshot is required.");
                 return;
             }
+
+            if (!WeldingToolRules.TryGetDefinition(ActiveTool, out _toolDefinition))
+            {
+                FailSetup("The welding tool snapshot has no valid tool definition.");
+                return;
+            }
+
+            _currentTraceRadius01 = _toolDefinition.InitialRadius;
 
             if (_minigameCanvas == null)
             {
@@ -284,6 +292,8 @@ namespace Game.Minigames
             _isReturningToGameplayView = false;
             _pendingResult = MinigameResult.None;
             _setupFailureReason = string.Empty;
+            _currentTraceRadius01 = 0f;
+            _toolDefinition = default;
             _toolSession.Clear();
         }
 
@@ -656,7 +666,15 @@ namespace Game.Minigames
 
         private float GetWorldTraceRadius01()
         {
-            return Mathf.Clamp(_worldTraceRadius01, 0.012f, 0.2f);
+            if (!_toolDefinition.IsValid)
+            {
+                return 0f;
+            }
+
+            return Mathf.Clamp(
+                _currentTraceRadius01,
+                _toolDefinition.MinimumRadius,
+                _toolDefinition.MaximumRadius);
         }
 
         private void UpdateWorldAnchorMarkerVisuals(WeldAnchorState targetedAnchor, float targetedSeamT, bool paintHeld)
@@ -1309,8 +1327,6 @@ namespace Game.Minigames
             _worldAnchorWeldRate = Mathf.Max(0.1f, GetFloatParameter("world_anchor_weld_rate", _worldAnchorWeldRate));
             _worldAnchorScreenRadiusPixels = Mathf.Max(12f, GetFloatParameter("world_anchor_screen_radius", _worldAnchorScreenRadiusPixels));
             _showWorldAnchorMarkers = GetBoolParameter("world_anchor_markers", _showWorldAnchorMarkers);
-            _worldTraceRadius01 = Mathf.Clamp(GetFloatParameter("world_trace_radius", _worldTraceRadius01), 0.012f, 0.2f);
-
             _minigameData.timeLimit = 0f;
         }
 
