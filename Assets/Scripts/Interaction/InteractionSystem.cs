@@ -33,6 +33,7 @@ namespace Game.Interaction
     {
         private static readonly HashSet<string> LoggedFallbackValidationWarnings = new HashSet<string>();
         private const string LocalPlayerId = PlayerContextRegistry.DefaultLocalPlayerId;
+        private const float DefaultRaycastRange = 4f;
 
         [Header("Raycast Interaction")]
         [SerializeField]
@@ -51,16 +52,18 @@ namespace Game.Interaction
         [SerializeField]
         private bool _enableInteractionLogs = true;
 
-        private BaseInteractable _currentInteractable;
-        private BaseInteractable _queuedInteractable;
+        private InteractionTarget _currentTarget;
+        private InteractionTarget _queuedTarget;
         private InputManager _inputManager;
         private bool _isSubscribedToInteract;
         private bool _interactRequested;
         private int _interactRequestedFrame = -1;
+        private int _lastInteractInputFrame = -1;
         private bool _hasLoggedParentCameraFallback;
 
         private void OnEnable()
         {
+            _lastInteractInputFrame = -1;
             PlayerContextRegistry.RegisterOrUpdate(this, LocalPlayerId);
             TryResolveRaycastCameraFromContext();
 
@@ -80,6 +83,8 @@ namespace Game.Interaction
         {
             PlayerContextRegistry.Unregister(this, LocalPlayerId);
             UnsubscribeFromInput();
+            CancelQueuedInteraction();
+            SetCurrentTarget(default);
         }
 
         private void Update()
@@ -87,6 +92,8 @@ namespace Game.Interaction
             if (!IsLocallyOwnedInteractionSystem())
             {
                 UnsubscribeFromInput();
+                CancelQueuedInteraction();
+                SetCurrentTarget(default);
                 return;
             }
 
@@ -103,36 +110,14 @@ namespace Game.Interaction
 
         private void UpdateRaycastInteraction()
         {
-            if (_raycastCamera == null)
+            if (IsInteractionExecutionBlocked(out _)
+                || !TryFindInteractable(out InteractionTarget target))
             {
+                SetCurrentTarget(default);
                 return;
             }
 
-            Ray ray = new Ray(_raycastCamera.transform.position, _raycastCamera.transform.forward);
-            BaseInteractable newInteractable = null;
-
-            if (Physics.Raycast(ray, out RaycastHit hit, _raycastRange, _raycastLayerMask))
-            {
-                BaseInteractable interactable = hit.collider.GetComponent<BaseInteractable>();
-                if (interactable != null)
-                {
-                    newInteractable = interactable;
-                }
-            }
-
-            if (newInteractable != _currentInteractable)
-            {
-                if (_currentInteractable != null)
-                {
-                    _currentInteractable.OnInteractableExit();
-                }
-
-                _currentInteractable = newInteractable;
-                if (_currentInteractable != null)
-                {
-                    _currentInteractable.OnInteractableEnter();
-                }
-            }
+            SetCurrentTarget(target);
         }
 
         private void HandleQueuedInteractRequest()
@@ -142,19 +127,35 @@ namespace Game.Interaction
                 return;
             }
 
-            BaseInteractable queuedInteractable = _queuedInteractable;
+            InteractionTarget queuedTarget = _queuedTarget;
             int queuedFrame = _interactRequestedFrame;
-
-            _interactRequested = false;
-            _interactRequestedFrame = -1;
-            _queuedInteractable = null;
+            CancelQueuedInteraction();
 
             if (IsInteractionExecutionBlocked(out string blockReason))
+            {
+                SetCurrentTarget(default);
+                if (_enableInteractionLogs)
+                {
+                    Debug.Log(
+                        $"[InteractionSystem] Interact blocked. queuedFrame={queuedFrame}, consumeFrame={Time.frameCount}, reason={blockReason}, queued={GetInteractableDebugName(queuedTarget.Interactable)}");
+                }
+
+                return;
+            }
+
+            if (!TryFindInteractable(out InteractionTarget finalTarget))
+            {
+                SetCurrentTarget(default);
+                return;
+            }
+
+            SetCurrentTarget(finalTarget);
+            if (finalTarget.Interactable != queuedTarget.Interactable)
             {
                 if (_enableInteractionLogs)
                 {
                     Debug.Log(
-                        $"[InteractionSystem] Interact blocked. queuedFrame={queuedFrame}, consumeFrame={Time.frameCount}, reason={blockReason}, queued={GetInteractableDebugName(queuedInteractable)}");
+                        $"[InteractionSystem] Interact skipped: target changed after input. queued={GetInteractableDebugName(queuedTarget.Interactable)}, final={GetInteractableDebugName(finalTarget.Interactable)}");
                 }
 
                 return;
@@ -163,36 +164,36 @@ namespace Game.Interaction
             if (_enableInteractionLogs)
             {
                 Debug.Log(
-                    $"[InteractionSystem] Consuming queued interact. queuedFrame={queuedFrame}, consumeFrame={Time.frameCount}, queued={GetInteractableDebugName(queuedInteractable)}, current={GetInteractableDebugName(_currentInteractable)}");
+                    $"[InteractionSystem] Consuming queued interact. queuedFrame={queuedFrame}, consumeFrame={Time.frameCount}, target={GetInteractableDebugName(finalTarget.Interactable)}");
             }
 
-            InteractWithCaptured(queuedInteractable);
+            InteractWithResolvedTarget(finalTarget);
         }
 
-        private void InteractWithCaptured(BaseInteractable capturedInteractable)
+        private void InteractWithResolvedTarget(InteractionTarget target)
         {
-            if (!IsValidInteractableForExecution(capturedInteractable))
+            if (!InteractionTargetResolver.IsValidTarget(target))
             {
                 if (_enableInteractionLogs)
                 {
                     Debug.Log(
-                        $"[InteractionSystem] Interact skipped: captured target is invalid. captured={GetInteractableDebugName(capturedInteractable)}");
+                        $"[InteractionSystem] Interact skipped: resolved target is invalid. target={GetInteractableDebugName(target.Interactable)}");
                 }
 
                 return;
             }
 
-            if (TryRouteNetworkInteraction(capturedInteractable))
+            if (TryRouteNetworkInteraction(target.Interactable))
             {
                 return;
             }
 
             if (_enableInteractionLogs)
             {
-                Debug.Log($"[InteractionSystem] Calling Interact() on {GetInteractableDebugName(capturedInteractable)}.");
+                Debug.Log($"[InteractionSystem] Calling Interact() on {GetInteractableDebugName(target.Interactable)}.");
             }
 
-            capturedInteractable.Interact();
+            target.Interactable.Interact();
         }
 
         private bool TryRouteNetworkInteraction(BaseInteractable capturedInteractable)
@@ -226,33 +227,64 @@ namespace Game.Interaction
             }
 
             Ray ray = new Ray(_raycastCamera.transform.position, _raycastCamera.transform.forward);
-            Color rayColor = _currentInteractable != null ? Color.green : Color.white;
-            Debug.DrawRay(ray.origin, ray.direction * _raycastRange, rayColor);
+            Color rayColor = _currentTarget.Interactable != null ? Color.green : Color.white;
+            Debug.DrawRay(ray.origin, ray.direction * GetEffectiveRaycastRange(), rayColor);
         }
 
         public BaseInteractable GetCurrentInteractable()
         {
-            return _currentInteractable;
+            return _currentTarget.Interactable;
         }
 
         public bool CanInteractWithCurrent()
         {
-            return _currentInteractable != null && _currentInteractable.CanInteract;
+            return !IsInteractionExecutionBlocked(out _)
+                   && InteractionTargetResolver.IsValidTarget(_currentTarget);
         }
 
         public bool IsInteractableInRange(BaseInteractable interactable)
         {
-            return interactable == _currentInteractable;
+            return interactable != null
+                   && interactable == _currentTarget.Interactable
+                   && InteractionTargetResolver.IsValidTarget(_currentTarget);
         }
 
         public void SetRaycastRange(float range)
         {
-            _raycastRange = Mathf.Max(0.1f, range);
+            _raycastRange = IsFinitePositive(range) ? range : DefaultRaycastRange;
         }
 
         public float GetRaycastRange()
         {
-            return _raycastRange;
+            return GetEffectiveRaycastRange();
+        }
+
+        public void SetRaycastLayerMask(LayerMask layerMask)
+        {
+            _raycastLayerMask = layerMask;
+        }
+
+        public int GetEffectiveRaycastLayerMask()
+        {
+            return InteractionTargetResolver.GetEffectiveLayerMask(_raycastLayerMask);
+        }
+
+        public bool TryFindInteractable(out InteractionTarget target)
+        {
+            target = default;
+            if (_raycastCamera == null || !_raycastCamera.isActiveAndEnabled)
+            {
+                return false;
+            }
+
+            Ray ray = new Ray(
+                _raycastCamera.transform.position,
+                _raycastCamera.transform.forward);
+            return InteractionTargetResolver.TryFindInteractable(
+                ray,
+                GetEffectiveRaycastRange(),
+                _raycastLayerMask,
+                out target);
         }
 
         public void ForceInteract(BaseInteractable interactable)
@@ -262,10 +294,15 @@ namespace Game.Interaction
                 return;
             }
 
-            if (IsValidInteractableForExecution(interactable))
+            if (TryFindInteractable(out InteractionTarget finalTarget)
+                && finalTarget.Interactable == interactable)
             {
-                interactable.Interact();
+                SetCurrentTarget(finalTarget);
+                InteractWithResolvedTarget(finalTarget);
+                return;
             }
+
+            SetCurrentTarget(default);
         }
 
         private void TrySubscribeToInput()
@@ -304,24 +341,42 @@ namespace Game.Interaction
 
             _isSubscribedToInteract = false;
             _inputManager = null;
-            _interactRequested = false;
-            _queuedInteractable = null;
-            _interactRequestedFrame = -1;
+            CancelQueuedInteraction();
         }
 
         private void OnInteractPerformed()
         {
-            _queuedInteractable = IsValidInteractableForExecution(_currentInteractable)
-                ? _currentInteractable
-                : null;
+            if (!IsLocallyOwnedInteractionSystem())
+            {
+                CancelQueuedInteraction();
+                SetCurrentTarget(default);
+                return;
+            }
 
-            _interactRequested = _queuedInteractable != null;
-            _interactRequestedFrame = Time.frameCount;
+            int inputFrame = Time.frameCount;
+            if (_lastInteractInputFrame == inputFrame)
+            {
+                return;
+            }
+
+            _lastInteractInputFrame = inputFrame;
+            if (IsInteractionExecutionBlocked(out _)
+                || !TryFindInteractable(out InteractionTarget inputTarget))
+            {
+                CancelQueuedInteraction();
+                SetCurrentTarget(default);
+                return;
+            }
+
+            SetCurrentTarget(inputTarget);
+            _queuedTarget = inputTarget;
+            _interactRequested = true;
+            _interactRequestedFrame = inputFrame;
 
             if (_enableInteractionLogs)
             {
                 Debug.Log(
-                    $"[InteractionSystem] Interact event fired. eventFrame={Time.frameCount}, currentAtEvent={GetInteractableDebugName(_currentInteractable)}, queued={GetInteractableDebugName(_queuedInteractable)}");
+                    $"[InteractionSystem] Interact event fired. eventFrame={inputFrame}, queued={GetInteractableDebugName(_queuedTarget.Interactable)}");
             }
         }
 
@@ -375,12 +430,46 @@ namespace Game.Interaction
             return false;
         }
 
-        private static bool IsValidInteractableForExecution(BaseInteractable interactable)
+        private void SetCurrentTarget(InteractionTarget target)
         {
-            return interactable != null
-                   && interactable.isActiveAndEnabled
-                   && interactable.gameObject.activeInHierarchy
-                   && interactable.CanInteract;
+            BaseInteractable previousInteractable = _currentTarget.Interactable;
+            BaseInteractable nextInteractable = InteractionTargetResolver.IsValidTarget(target)
+                ? target.Interactable
+                : null;
+
+            if (previousInteractable == nextInteractable)
+            {
+                _currentTarget = nextInteractable != null ? target : default;
+                return;
+            }
+
+            if (previousInteractable != null)
+            {
+                previousInteractable.OnInteractableExit();
+            }
+
+            _currentTarget = nextInteractable != null ? target : default;
+            if (nextInteractable != null)
+            {
+                nextInteractable.OnInteractableEnter();
+            }
+        }
+
+        private void CancelQueuedInteraction()
+        {
+            _interactRequested = false;
+            _interactRequestedFrame = -1;
+            _queuedTarget = default;
+        }
+
+        private float GetEffectiveRaycastRange()
+        {
+            return IsFinitePositive(_raycastRange) ? _raycastRange : DefaultRaycastRange;
+        }
+
+        private static bool IsFinitePositive(float value)
+        {
+            return value > 0f && !float.IsNaN(value) && !float.IsInfinity(value);
         }
 
         private static string GetInteractableDebugName(BaseInteractable interactable)
