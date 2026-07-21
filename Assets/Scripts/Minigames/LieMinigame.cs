@@ -58,6 +58,7 @@ namespace Game.Minigames
         private string _postResultQuestionText = string.Empty;
         private MinigameResult _pendingResult = MinigameResult.None;
         private bool _pendingFollowUpConfirmRequest;
+        private readonly PressReleaseLatch _triggerPressLatch = new();
 
         private enum GameState
         {
@@ -77,6 +78,38 @@ namespace Game.Minigames
             public string FollowUpText;
             public string BranchHook;
             public string NextStepId;
+        }
+
+        private sealed class PressReleaseLatch
+        {
+            private bool _releaseRequired;
+
+            public void Reset()
+            {
+                _releaseRequired = false;
+            }
+
+            public void Arm(bool isPressed)
+            {
+                _releaseRequired = isPressed;
+            }
+
+            public bool TryConsume(bool isPressed)
+            {
+                if (!isPressed)
+                {
+                    _releaseRequired = false;
+                    return false;
+                }
+
+                if (_releaseRequired)
+                {
+                    return false;
+                }
+
+                _releaseRequired = true;
+                return true;
+            }
         }
 
         private readonly List<AnswerOptionConfig> _answerOptions = new();
@@ -112,6 +145,7 @@ namespace Game.Minigames
             _pendingResult = MinigameResult.None;
             _pendingFollowUpConfirmRequest = false;
             _targetZoneWidth = _baseTargetZoneWidth;
+            _triggerPressLatch.Reset();
         }
 
         protected override void OnStart()
@@ -419,6 +453,7 @@ namespace Game.Minigames
             _indicatorDirection = 1f;
             _isInputEnabled = true;
             _gameState = GameState.WaitingForPress;
+            _triggerPressLatch.Arm(ReadTriggerState());
         }
 
         private int GetParameterInt(string key, int defaultValue)
@@ -533,16 +568,15 @@ namespace Game.Minigames
 
         private void HandleInput()
         {
-            if (_gameState != GameState.WaitingForPress)
-                return;
-
-            if (IsTriggerPressed())
-            {
-                OnPlayerPressed();
-            }
+            TryHandleTriggerPress(IsTriggerPressed());
         }
 
         private bool IsTriggerPressed()
+        {
+            return _triggerPressLatch.TryConsume(ReadTriggerState());
+        }
+
+        private bool ReadTriggerState()
         {
             if (InputManager.Instance == null)
             {
@@ -566,6 +600,17 @@ namespace Game.Minigames
                 default:
                     return InputManager.Instance.IsJumpPressed();
             }
+        }
+
+        private bool TryHandleTriggerPress(bool triggerPressed)
+        {
+            if (!_isInputEnabled || _gameState != GameState.WaitingForPress || !triggerPressed)
+            {
+                return false;
+            }
+
+            OnPlayerPressed();
+            return true;
         }
 
         private void OnPlayerPressed()
