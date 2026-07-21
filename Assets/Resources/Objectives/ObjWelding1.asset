@@ -17,7 +17,7 @@ MonoBehaviour:
   _objectiveDescription: Complete this objective.
   _objectiveType: 2
   _targetMinigameId: welding
-  _requiredCompletions: 3
+  _requiredCompletions: 1
   _countPassOnly: 1
   _rewardCurrency: 50
   _rewardItems: []
