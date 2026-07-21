@@ -24,7 +24,6 @@ namespace Game.Minigames
             public bool IsCleaned;
         }
 
-        private const int FixedSwipesPerStain = 6;
         private const int DefaultStainsPerSurface = 2;
         private const int DefaultSpawnAttemptsPerStain = 14;
         private const float MinTopSurfaceDot = 0.65f;
@@ -64,7 +63,6 @@ namespace Game.Minigames
         private float _timeLimitSeconds = DefaultTimeLimitSeconds;
         private float _remainingTimeSeconds = DefaultTimeLimitSeconds;
         private int _timeoutCurrencyPenalty = DefaultTimeoutCurrencyPenalty;
-        private int _fixedSwipesPerStain = FixedSwipesPerStain;
         private int _requiredStainsMin = -1;
         private int _requiredStainsMax = -1;
         private int? _worldSpawnSeed;
@@ -322,7 +320,6 @@ namespace Game.Minigames
             _worldStainEdgePadding = Mathf.Max(0f, GetParameterFloat("world_stain_edge_padding") ?? _worldStainEdgePadding);
             _worldStainsPerSurface = Mathf.Max(1, GetParameterInt("world_stains_per_surface") ?? _worldStainsPerSurface);
             _freezePlayerMovementInWorldView = GetParameterBool("world_freeze_player") ?? _freezePlayerMovementInWorldView;
-            _fixedSwipesPerStain = Mathf.Max(1, GetParameterInt("world_fixed_swipes_per_stain") ?? _fixedSwipesPerStain);
             _requiredStainsMin = GetParameterInt("required_stains_min") ?? _requiredStainsMin;
             _requiredStainsMax = GetParameterInt("required_stains_max") ?? _requiredStainsMax;
             _worldSpawnSeed = GetParameterInt("world_spawn_seed");
@@ -360,7 +357,7 @@ namespace Game.Minigames
             Debug.Log(
                 $"[CleaningMinigame] Parameters loaded: TimeLimit={_timeLimitSeconds:0.0}s, " +
                 $"TimeoutPenalty={_timeoutCurrencyPenalty}, " +
-                $"FixedSwipesPerStain={_fixedSwipesPerStain}, " +
+                $"RequiredPasses={CleaningToolRules.GetRequiredPasses(ActiveTool)}, " +
                 $"StainsPerSurface={_worldStainsPerSurface}");
         }
 
@@ -725,7 +722,7 @@ namespace Game.Minigames
                     MarkerTransform = stainObject.transform,
                     MarkerRenderer = primaryRenderer,
                     StainView = null,
-                    RequiredSwipes = Mathf.Max(1, _fixedSwipesPerStain),
+                    RequiredSwipes = CleaningToolRules.GetRequiredPasses(ActiveTool),
                     SwipeProgress = 0f,
                     IsCleaned = false
                 });

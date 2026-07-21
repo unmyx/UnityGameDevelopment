@@ -17,7 +17,6 @@ namespace Game.Interaction
     /// </summary>
     public class PipeInteractable : MinigameInteractableBase
     {
-        private const int FixedSwipesPerStain = 6;
         private const string DailyTaskType = "cleaning";
         private const string MinigameId = "cleaning";
 
@@ -213,7 +212,6 @@ namespace Game.Interaction
             data.SetParameter("world_stain_marker_scale", _worldStainMarkerScale);
             data.SetParameter("world_stain_min_spacing", _worldStainMinSpacing);
             data.SetParameter("world_stains_per_surface", _worldStainsPerSurface);
-            data.SetParameter("world_fixed_swipes_per_stain", FixedSwipesPerStain);
             data.SetParameter("required_stains_min", _requiredStainsMin);
             data.SetParameter("required_stains_max", _requiredStainsMax);
             data.SetParameter("world_spawn_seed", UnityEngine.Random.Range(int.MinValue, int.MaxValue));
