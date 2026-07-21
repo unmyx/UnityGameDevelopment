@@ -5,6 +5,7 @@ using Game.Player;
 using TMPro;
 using UnityEngine;
 using UnityEngine.Rendering.Universal;
+using Game.Inventory;
 
 namespace Game.Minigames
 {
@@ -69,6 +70,16 @@ namespace Game.Minigames
         private int? _worldSpawnSeed;
         private string _cleaningToolLabel = "Water";
         private float _cleaningToolEffectivenessMultiplier = 1f;
+        private readonly MinigameToolSession _toolSession = new MinigameToolSession();
+
+        public ToolType ActiveTool => _toolSession.ActiveTool;
+
+        public static bool SupportsTool(ToolType toolType)
+        {
+            return toolType == ToolType.Water
+                   || toolType == ToolType.Gasoline
+                   || toolType == ToolType.Chemical;
+        }
 
         private Canvas _minigameCanvas;
         private readonly List<WorldStainState> _worldStains = new List<WorldStainState>(24);
@@ -111,6 +122,19 @@ namespace Game.Minigames
         protected override void OnInitialize()
         {
             LoadParameters();
+
+            if (!_toolSession.TryCapture(MinigameToolSnapshot.Get(_minigameData), SupportsTool))
+            {
+                _isInitialized = false;
+                if (_minigameCanvas != null)
+                {
+                    _minigameCanvas.enabled = false;
+                }
+
+                return;
+            }
+
+            _cleaningToolLabel = ActiveTool.ToString();
 
             if (_minigameCanvas != null)
             {
@@ -238,6 +262,7 @@ namespace Game.Minigames
             _isReturningToGameplayView = false;
             _pendingResult = MinigameResult.None;
             _hasMousePosition = false;
+            _toolSession.Clear();
         }
 
         private void LoadParameters()
@@ -301,7 +326,6 @@ namespace Game.Minigames
             _requiredStainsMin = GetParameterInt("required_stains_min") ?? _requiredStainsMin;
             _requiredStainsMax = GetParameterInt("required_stains_max") ?? _requiredStainsMax;
             _worldSpawnSeed = GetParameterInt("world_spawn_seed");
-            _cleaningToolLabel = GetParameter<string>("cleaning_tool_label") ?? _cleaningToolLabel;
             _cleaningToolEffectivenessMultiplier =
                 Mathf.Max(0.01f, GetParameterFloat("cleaning_tool_effectiveness_multiplier") ?? _cleaningToolEffectivenessMultiplier);
 

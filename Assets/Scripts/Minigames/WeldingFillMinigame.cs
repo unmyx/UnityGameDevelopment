@@ -5,6 +5,7 @@ using Game.Player;
 using TMPro;
 using UnityEngine;
 using UnityEngine.UI;
+using Game.Inventory;
 
 namespace Game.Minigames
 {
@@ -103,12 +104,26 @@ namespace Game.Minigames
         private MinigameResult _pendingResult = MinigameResult.None;
         private bool _hasLoggedCameraFallbackWarning;
         private Coroutine _cameraTransitionRoutine;
+        private readonly MinigameToolSession _toolSession = new MinigameToolSession();
+
+        public ToolType ActiveTool => _toolSession.ActiveTool;
+
+        public static bool SupportsTool(ToolType toolType)
+        {
+            return toolType == ToolType.Electric || toolType == ToolType.CO2;
+        }
 
         protected override void OnInitialize()
         {
             LoadParameters();
             _isSetupValid = true;
             _setupFailureReason = string.Empty;
+
+            if (!_toolSession.TryCapture(MinigameToolSnapshot.Get(_minigameData), SupportsTool))
+            {
+                FailSetup("A compatible welding tool snapshot is required.");
+                return;
+            }
 
             if (_minigameCanvas == null)
             {
@@ -269,6 +284,7 @@ namespace Game.Minigames
             _isReturningToGameplayView = false;
             _pendingResult = MinigameResult.None;
             _setupFailureReason = string.Empty;
+            _toolSession.Clear();
         }
 
         private void FailSetup(string reason)

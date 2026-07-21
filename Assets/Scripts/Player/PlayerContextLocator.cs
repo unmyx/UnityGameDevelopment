@@ -1,5 +1,6 @@
 using Game.Core;
 using Game.Interaction;
+using Game.Inventory;
 using Game.UI;
 using UnityEngine;
 using System.Collections.Generic;
@@ -186,6 +187,28 @@ namespace Game.Player
             }
 
             interactionSystem = null;
+            return false;
+        }
+
+        public static bool TryGetLocalSelectedQuickSlotItem(out InventoryItem item)
+        {
+            if (TryGetLocalContext(out PlayerContext context) && context != null)
+            {
+                return context.TryGetSelectedQuickSlotItem(out item);
+            }
+
+            item = null;
+            return false;
+        }
+
+        public static bool TryGetLocalSelectedTool(out ToolType toolType)
+        {
+            if (TryGetLocalContext(out PlayerContext context) && context != null)
+            {
+                return context.TryGetSelectedTool(out toolType);
+            }
+
+            toolType = ToolType.None;
             return false;
         }
 

@@ -2,6 +2,7 @@ using System.Collections.Generic;
 using System;
 using Game.Core;
 using Game.Core.Events;
+using Game.Inventory;
 using Game.Minigames;
 using Game.Networking;
 using Game.Player;
@@ -91,6 +92,34 @@ namespace Game.Interaction
         private int _activeWeldingSessionToken;
         private string _activeWeldingTaskKey = string.Empty;
         private bool _hasSubmittedWeldingResult;
+        private ToolType _interactionToolSnapshot = ToolType.None;
+        private ToolType _pendingNetworkToolSnapshot = ToolType.None;
+
+        public override void Interact()
+        {
+            if (!CanInteract)
+            {
+                return;
+            }
+
+            if (!PlayerContextLocator.TryGetLocalSelectedTool(out ToolType selectedTool)
+                || !WeldingFillMinigame.SupportsTool(selectedTool))
+            {
+                EventBus.Publish(new PlayerFeedbackEvent(
+                    "Select a welding tool: Electric or CO2."));
+                return;
+            }
+
+            _interactionToolSnapshot = selectedTool;
+            try
+            {
+                base.Interact();
+            }
+            finally
+            {
+                _interactionToolSnapshot = ToolType.None;
+            }
+        }
 
         private void OnEnable()
         {
@@ -108,11 +137,18 @@ namespace Game.Interaction
             EventBus.Unsubscribe<MinigameCancelledEvent>(OnMinigameCancelled);
             _awaitingNetworkStartApproval = false;
             _pendingNetworkStartTaskKey = string.Empty;
+            _interactionToolSnapshot = ToolType.None;
+            _pendingNetworkToolSnapshot = ToolType.None;
             ClearActiveWeldingSession();
         }
 
         protected override MinigameData BuildMinigameData()
         {
+            if (!WeldingFillMinigame.SupportsTool(_interactionToolSnapshot))
+            {
+                return null;
+            }
+
             if (!TryResolveRequiredReferences(out string validationError))
             {
                 Debug.LogError(
@@ -159,12 +195,21 @@ namespace Game.Interaction
             data.SetParameter("world_anchor_weld_rate", _worldAnchorWeldRate * weldingEffectivenessMultiplier * weldingDayDifficultyMultiplier);
             data.SetParameter("world_anchor_screen_radius", _worldAnchorScreenRadiusPixels);
             data.SetParameter("world_anchor_markers", _showWorldAnchorMarkers);
+            MinigameToolSnapshot.Set(data, _interactionToolSnapshot);
 
             return data;
         }
 
         protected override void StartMinigame(MinigameData data)
         {
+            ToolType toolSnapshot = MinigameToolSnapshot.Get(data);
+            if (!WeldingFillMinigame.SupportsTool(toolSnapshot))
+            {
+                EventBus.Publish(new PlayerFeedbackEvent(
+                    "Select a welding tool: Electric or CO2."));
+                return;
+            }
+
             string taskKey = GetDailyTaskLocationKey();
 
             if (IsNetworkSession())
@@ -182,6 +227,7 @@ namespace Game.Interaction
 
                 _awaitingNetworkStartApproval = true;
                 _pendingNetworkStartTaskKey = taskKey;
+                _pendingNetworkToolSnapshot = toolSnapshot;
                 authority.RequestJobInteractableStart(DailyTaskType, taskKey, MinigameId);
                 return;
             }
@@ -221,8 +267,10 @@ namespace Game.Interaction
             }
 
             string requestedTaskKey = _pendingNetworkStartTaskKey;
+            ToolType requestedTool = _pendingNetworkToolSnapshot;
             _awaitingNetworkStartApproval = false;
             _pendingNetworkStartTaskKey = string.Empty;
+            _pendingNetworkToolSnapshot = ToolType.None;
 
             if (!response.approved)
             {
@@ -253,7 +301,16 @@ namespace Game.Interaction
                 _hasSubmittedWeldingResult = false;
             }
 
-            MinigameData approvedData = BuildMinigameData();
+            _interactionToolSnapshot = requestedTool;
+            MinigameData approvedData;
+            try
+            {
+                approvedData = BuildMinigameData();
+            }
+            finally
+            {
+                _interactionToolSnapshot = ToolType.None;
+            }
             if (approvedData == null || string.IsNullOrWhiteSpace(approvedData.minigameId))
             {
                 ClearActiveWeldingSession();

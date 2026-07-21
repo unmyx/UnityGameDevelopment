@@ -2,6 +2,7 @@
 using System.Collections.Generic;
 using Game.Core;
 using Game.Core.Events;
+using Game.Inventory;
 using Game.Minigames;
 using Game.Networking;
 using Game.Player;
@@ -109,6 +110,34 @@ namespace Game.Interaction
         private int _activeCleaningSessionToken;
         private string _activeCleaningTaskKey = string.Empty;
         private bool _hasSubmittedCleaningResult;
+        private ToolType _interactionToolSnapshot = ToolType.None;
+        private ToolType _pendingNetworkToolSnapshot = ToolType.None;
+
+        public override void Interact()
+        {
+            if (!CanInteract)
+            {
+                return;
+            }
+
+            if (!PlayerContextLocator.TryGetLocalSelectedTool(out ToolType selectedTool)
+                || !CleaningMinigame.SupportsTool(selectedTool))
+            {
+                EventBus.Publish(new PlayerFeedbackEvent(
+                    "Select a cleaning tool: Water, Gasoline, or Chemical."));
+                return;
+            }
+
+            _interactionToolSnapshot = selectedTool;
+            try
+            {
+                base.Interact();
+            }
+            finally
+            {
+                _interactionToolSnapshot = ToolType.None;
+            }
+        }
 
         private void OnEnable()
         {
@@ -126,11 +155,18 @@ namespace Game.Interaction
             EventBus.Unsubscribe<MinigameCancelledEvent>(OnMinigameCancelled);
             _awaitingNetworkStartApproval = false;
             _pendingNetworkStartTaskKey = string.Empty;
+            _interactionToolSnapshot = ToolType.None;
+            _pendingNetworkToolSnapshot = ToolType.None;
             ClearActiveCleaningSession();
         }
 
         protected override MinigameData BuildMinigameData()
         {
+            if (!CleaningMinigame.SupportsTool(_interactionToolSnapshot))
+            {
+                return null;
+            }
+
             if (!TryResolveRequiredReferences(out string validationError))
             {
                 Debug.LogError(
@@ -181,29 +217,22 @@ namespace Game.Interaction
             data.SetParameter("required_stains_min", _requiredStainsMin);
             data.SetParameter("required_stains_max", _requiredStainsMax);
             data.SetParameter("world_spawn_seed", UnityEngine.Random.Range(int.MinValue, int.MaxValue));
-            data.SetParameter("cleaning_tool_label", ResolveCleaningToolLabel(cleaningEffectivenessMultiplier));
             data.SetParameter("cleaning_tool_effectiveness_multiplier", cleaningEffectivenessMultiplier);
+            MinigameToolSnapshot.Set(data, _interactionToolSnapshot);
 
             return data;
         }
 
-        private static string ResolveCleaningToolLabel(float multiplier)
-        {
-            if (multiplier >= 1.35f)
-            {
-                return "Chemical";
-            }
-
-            if (multiplier >= 1.1f)
-            {
-                return "Gasoline";
-            }
-
-            return "Water";
-        }
-
         protected override void StartMinigame(MinigameData data)
         {
+            ToolType toolSnapshot = MinigameToolSnapshot.Get(data);
+            if (!CleaningMinigame.SupportsTool(toolSnapshot))
+            {
+                EventBus.Publish(new PlayerFeedbackEvent(
+                    "Select a cleaning tool: Water, Gasoline, or Chemical."));
+                return;
+            }
+
             string taskKey = GetDailyTaskLocationKey();
 
             if (IsNetworkSession())
@@ -221,6 +250,7 @@ namespace Game.Interaction
 
                 _awaitingNetworkStartApproval = true;
                 _pendingNetworkStartTaskKey = taskKey;
+                _pendingNetworkToolSnapshot = toolSnapshot;
                 authority.RequestJobInteractableStart(DailyTaskType, taskKey, MinigameId);
                 return;
             }
@@ -260,8 +290,10 @@ namespace Game.Interaction
             }
 
             string requestedTaskKey = _pendingNetworkStartTaskKey;
+            ToolType requestedTool = _pendingNetworkToolSnapshot;
             _awaitingNetworkStartApproval = false;
             _pendingNetworkStartTaskKey = string.Empty;
+            _pendingNetworkToolSnapshot = ToolType.None;
 
             if (!response.approved)
             {
@@ -293,7 +325,16 @@ namespace Game.Interaction
                 _hasSubmittedCleaningResult = false;
             }
 
-            MinigameData approvedData = BuildMinigameData();
+            _interactionToolSnapshot = requestedTool;
+            MinigameData approvedData;
+            try
+            {
+                approvedData = BuildMinigameData();
+            }
+            finally
+            {
+                _interactionToolSnapshot = ToolType.None;
+            }
             if (approvedData == null || string.IsNullOrWhiteSpace(approvedData.minigameId))
             {
                 ClearActiveCleaningSession();

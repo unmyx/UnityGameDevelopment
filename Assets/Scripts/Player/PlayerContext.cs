@@ -1,4 +1,5 @@
 using Game.Interaction;
+using Game.Inventory;
 using Game.UI;
 using UnityEngine;
 
@@ -152,6 +153,30 @@ namespace Game.Player
         public void SetSelectedQuickSlotIndex(int selectedQuickSlotIndex)
         {
             SelectedQuickSlotIndex = Mathf.Max(0, selectedQuickSlotIndex);
+        }
+
+        public bool TryGetSelectedQuickSlotItem(out InventoryItem item)
+        {
+            InventorySystem inventorySystem = InventorySystem.Instance;
+            if (inventorySystem == null)
+            {
+                item = null;
+                return false;
+            }
+
+            return inventorySystem.TryGetQuickSlotItem(SelectedQuickSlotIndex, out item);
+        }
+
+        public bool TryGetSelectedTool(out ToolType toolType)
+        {
+            if (TryGetSelectedQuickSlotItem(out InventoryItem item) && item != null)
+            {
+                toolType = item.ToolType;
+                return toolType != ToolType.None;
+            }
+
+            toolType = ToolType.None;
+            return false;
         }
     }
 }

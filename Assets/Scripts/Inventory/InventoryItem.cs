@@ -61,6 +61,10 @@ namespace Game.Inventory
         private ItemType _itemType = ItemType.Miscellaneous;
 
         [SerializeField]
+        [Tooltip("Typed gameplay capability for minigame tools. Existing items default to None.")]
+        private ToolType _toolType = ToolType.None;
+
+        [SerializeField]
         private bool _canEquip = false;
 
         [SerializeField]
@@ -75,6 +79,7 @@ namespace Game.Inventory
         public int GridWidth => _gridWidth;
         public int GridHeight => _gridHeight;
         public ItemType Type => _itemType;
+        public ToolType ToolType => _toolType;
         public bool CanEquip => _canEquip;
         public bool CanUse => _canUse;
 
@@ -109,6 +114,16 @@ namespace Game.Inventory
         Weapon,
         Armor,
         Tool
+    }
+
+    public enum ToolType
+    {
+        None = 0,
+        Water = 1,
+        Gasoline = 2,
+        Chemical = 3,
+        Electric = 4,
+        CO2 = 5
     }
 }
 

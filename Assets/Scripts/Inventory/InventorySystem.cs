@@ -64,6 +64,7 @@ namespace Game.Inventory
         private const int GRID_WIDTH = 5;
         private const int GRID_HEIGHT = 5;
         private const int MAX_SLOTS = GRID_WIDTH * GRID_HEIGHT;
+        private const int QUICK_SLOT_COUNT = 9;
 
 
         private InventorySlot[,] _gridSlots;
@@ -339,6 +340,23 @@ namespace Game.Inventory
             }
 
             return _gridSlots[gridX, gridY];
+        }
+
+        public bool TryGetQuickSlotItem(int quickSlotIndex, out InventoryItem item)
+        {
+            item = null;
+            EnsureInitialized();
+
+            if (quickSlotIndex < 0 || quickSlotIndex >= QUICK_SLOT_COUNT)
+            {
+                return false;
+            }
+
+            int gridX = quickSlotIndex % GRID_WIDTH;
+            int gridY = quickSlotIndex / GRID_WIDTH;
+            InventorySlot slot = _gridSlots[gridX, gridY];
+            item = slot != null ? slot.GetItem() : null;
+            return item != null;
         }
 
         public InventorySlot[,] GetGridData()
