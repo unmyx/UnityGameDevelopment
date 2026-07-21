@@ -32,12 +32,12 @@ namespace Game.UI
         [Header("Slot Icon Images (1-9)")]
         [SerializeField]
         [Tooltip("Assign icon Image components for Slot_1 through Slot_9.")]
-        private Image[] _slotIcons = new Image[9];
+        private Image[] _slotIcons = new Image[InventoryQuickSlotRules.MaxQuickSlots];
 
         [Header("Slot Background Images (1-9)")]
         [SerializeField]
         [Tooltip("Assign slot background Image components for Slot_1 through Slot_9.")]
-        private Image[] _slotBackgrounds = new Image[9];
+        private Image[] _slotBackgrounds = new Image[InventoryQuickSlotRules.MaxQuickSlots];
 
         [Header("Slot Layout")]
         [SerializeField]
@@ -148,7 +148,6 @@ namespace Game.UI
             new DropPrefabEntry { itemId = "wedding_ring_silver" }
         };
 
-        private const int VisibleSlotCount = 9;
         private const string PreviewCameraName = "InventoryPreviewCamera";
         private const string PreviewRootName = "InventoryPreviewRoot";
         private const string PreviewRawImageName = "SelectedItemPreview";
@@ -352,7 +351,7 @@ namespace Game.UI
             }
 
             (int width, int height) = inventorySystem.GetGridDimensions();
-            int maxSlots = Mathf.Min(VisibleSlotCount, _slotIcons.Length);
+            int maxSlots = Mathf.Min(InventoryQuickSlotRules.MaxQuickSlots, _slotIcons.Length);
 
             for (int index = 0; index < maxSlots; index++)
             {
@@ -527,7 +526,7 @@ namespace Game.UI
 
         private void RefreshSlotVisualAtIndex(int index)
         {
-            if (index < 0 || index >= VisibleSlotCount || index >= GetUnlockedQuickSlotCount())
+            if (!InventoryQuickSlotRules.IsValidIndex(index) || index >= GetUnlockedQuickSlotCount())
             {
                 return;
             }
@@ -539,7 +538,7 @@ namespace Game.UI
         private void ApplySelectedSlotVisuals()
         {
             int unlockedQuickSlots = GetUnlockedQuickSlotCount();
-            int maxSlots = Mathf.Min(VisibleSlotCount, _slotBackgrounds.Length);
+            int maxSlots = Mathf.Min(InventoryQuickSlotRules.MaxQuickSlots, _slotBackgrounds.Length);
             for (int i = 0; i < maxSlots; i++)
             {
                 Image slotBackground = _slotBackgrounds[i];
@@ -561,8 +560,10 @@ namespace Game.UI
         private int GetUnlockedQuickSlotCount()
         {
             GameManager gameManager = GameManager.Instance;
-            int unlocked = gameManager != null ? gameManager.GetUnlockedQuickSlots() : VisibleSlotCount;
-            return Mathf.Clamp(unlocked, 1, VisibleSlotCount);
+            int unlocked = gameManager != null
+                ? gameManager.GetUnlockedQuickSlots()
+                : InventoryQuickSlotRules.MaxQuickSlots;
+            return Mathf.Clamp(unlocked, 1, InventoryQuickSlotRules.MaxQuickSlots);
         }
 
         private void RefreshHeldItemObject()
@@ -1363,7 +1364,7 @@ namespace Game.UI
             PlayerContextRegistry.RegisterOrUpdate(this, LocalPlayerId);
             if (PlayerContextLocator.TryGetLocalContext(out PlayerContext localContext) && localContext != null)
             {
-                int contextSelectedSlot = Mathf.Max(0, localContext.SelectedQuickSlotIndex);
+                int contextSelectedSlot = InventoryQuickSlotRules.ClampIndex(localContext.SelectedQuickSlotIndex);
                 if (contextSelectedSlot != _selectedSlotIndex)
                 {
                     _selectedSlotIndex = contextSelectedSlot;
@@ -1413,7 +1414,7 @@ namespace Game.UI
 
         private GameObject GetSlotRoot(int index)
         {
-            if (index < 0 || index >= VisibleSlotCount)
+            if (!InventoryQuickSlotRules.IsValidIndex(index))
             {
                 return null;
             }

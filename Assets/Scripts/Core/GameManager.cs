@@ -1073,8 +1073,7 @@ namespace Game.Core
 
         public int GetUnlockedQuickSlots()
         {
-            int tier = GetOwnedUpgradeTier(UpgradeIdInventoryQuickSlots);
-            return Mathf.Clamp(3 + Mathf.Max(0, tier), 3, 9);
+            return InventoryQuickSlotRules.MaxQuickSlots;
         }
 
         public bool IsTrackedStolenLootItem(string itemId)
@@ -2991,7 +2990,7 @@ namespace Game.Core
         {
             if (PlayerContextLocator.TryGetLocalContext(out PlayerContext localContext) && localContext != null)
             {
-                return Mathf.Max(0, localContext.SelectedQuickSlotIndex);
+                return InventoryQuickSlotRules.ClampIndex(localContext.SelectedQuickSlotIndex);
             }
 
             PlayerContextLocator.TryGetLocalInventoryGridUI(out InventoryGridUI inventoryGridUI);
@@ -3010,7 +3009,7 @@ namespace Game.Core
 
         public void RestoreSelectedInventorySlotFromSave(int selectedSlotIndex)
         {
-            int normalizedSelectedSlotIndex = Mathf.Max(0, selectedSlotIndex);
+            int normalizedSelectedSlotIndex = InventoryQuickSlotRules.ClampIndex(selectedSlotIndex);
             if (PlayerContextLocator.TryGetLocalContext(out PlayerContext localContext) && localContext != null)
             {
                 localContext.SetSelectedQuickSlotIndex(normalizedSelectedSlotIndex);

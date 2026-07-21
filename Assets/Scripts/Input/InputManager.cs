@@ -2,6 +2,7 @@
 using UnityEngine.InputSystem;
 
 using Game.Core;
+using Game.Inventory;
 
 namespace Game.Input
 {
@@ -55,8 +56,8 @@ namespace Game.Input
         private InputAction _sprintAction;
         private InputAction _crouchAction;
         private InputAction _pauseAction;
-        private readonly InputAction[] _slotSelectActions = new InputAction[9];
-        private readonly bool[] _slotSelectTriggeredThisFrame = new bool[9];
+        private readonly InputAction[] _slotSelectActions = new InputAction[InventoryQuickSlotRules.MaxQuickSlots];
+        private readonly bool[] _slotSelectTriggeredThisFrame = new bool[InventoryQuickSlotRules.MaxQuickSlots];
         private bool _callbacksSubscribed;
         private bool _isDuplicateInstance;
 

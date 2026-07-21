@@ -152,7 +152,7 @@ namespace Game.Player
 
         public void SetSelectedQuickSlotIndex(int selectedQuickSlotIndex)
         {
-            SelectedQuickSlotIndex = Mathf.Max(0, selectedQuickSlotIndex);
+            SelectedQuickSlotIndex = InventoryQuickSlotRules.ClampIndex(selectedQuickSlotIndex);
         }
 
         public bool TryGetSelectedQuickSlotItem(out InventoryItem item)

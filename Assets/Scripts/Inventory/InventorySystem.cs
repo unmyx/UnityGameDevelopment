@@ -63,10 +63,6 @@ namespace Game.Inventory
 
         private const int GRID_WIDTH = 5;
         private const int GRID_HEIGHT = 5;
-        private const int MAX_SLOTS = GRID_WIDTH * GRID_HEIGHT;
-        private const int QUICK_SLOT_COUNT = 9;
-
-
         private InventorySlot[,] _gridSlots;
         private List<InventoryItem> _allItems;
         private readonly Dictionary<string, InventoryItem> _itemCacheById = new Dictionary<string, InventoryItem>();
@@ -238,7 +234,7 @@ namespace Game.Inventory
             EnsureInitialized();
             PlayerInventoryAuthority.LogNonLocalOwnerUsage("InventorySystem.RemoveItemAt", ownerPlayerId, this);
 
-            if (!IsValidPosition(gridX, gridY))
+            if (!IsQuickSlotPosition(gridX, gridY))
             {
                 return null;
             }
@@ -298,7 +294,7 @@ namespace Game.Inventory
         public bool IsInventoryFull()
         {
             EnsureInitialized();
-            return _allItems.Count >= MAX_SLOTS;
+            return CountOccupiedQuickSlots() >= InventoryQuickSlotRules.MaxQuickSlots;
         }
 
         public int GetItemCount()
@@ -310,7 +306,7 @@ namespace Game.Inventory
         public int GetAvailableSlots()
         {
             EnsureInitialized();
-            return MAX_SLOTS - _allItems.Count;
+            return InventoryQuickSlotRules.MaxQuickSlots - CountOccupiedQuickSlots();
         }
 
         public bool HasSpace()
@@ -347,13 +343,16 @@ namespace Game.Inventory
             item = null;
             EnsureInitialized();
 
-            if (quickSlotIndex < 0 || quickSlotIndex >= QUICK_SLOT_COUNT)
+            if (!InventoryQuickSlotRules.TryGetGridPosition(
+                    quickSlotIndex,
+                    GRID_WIDTH,
+                    GRID_HEIGHT,
+                    out int gridX,
+                    out int gridY))
             {
                 return false;
             }
 
-            int gridX = quickSlotIndex % GRID_WIDTH;
-            int gridY = quickSlotIndex / GRID_WIDTH;
             InventorySlot slot = _gridSlots[gridX, gridY];
             item = slot != null ? slot.GetItem() : null;
             return item != null;
@@ -374,23 +373,64 @@ namespace Game.Inventory
 
         private InventorySlot FindEmptySlot()
         {
-            for (int y = 0; y < GRID_HEIGHT; y++)
+            for (int quickSlotIndex = 0; quickSlotIndex < InventoryQuickSlotRules.MaxQuickSlots; quickSlotIndex++)
             {
-                for (int x = 0; x < GRID_WIDTH; x++)
+                if (!InventoryQuickSlotRules.TryGetGridPosition(
+                        quickSlotIndex,
+                        GRID_WIDTH,
+                        GRID_HEIGHT,
+                        out int gridX,
+                        out int gridY))
                 {
-                    if (_gridSlots[x, y].IsEmpty())
-                    {
-                        return _gridSlots[x, y];
-                    }
+                    continue;
+                }
+
+                if (_gridSlots[gridX, gridY].IsEmpty())
+                {
+                    return _gridSlots[gridX, gridY];
                 }
             }
 
             return null;
         }
 
+        private int CountOccupiedQuickSlots()
+        {
+            int occupiedCount = 0;
+            for (int quickSlotIndex = 0; quickSlotIndex < InventoryQuickSlotRules.MaxQuickSlots; quickSlotIndex++)
+            {
+                if (!InventoryQuickSlotRules.TryGetGridPosition(
+                        quickSlotIndex,
+                        GRID_WIDTH,
+                        GRID_HEIGHT,
+                        out int gridX,
+                        out int gridY))
+                {
+                    continue;
+                }
+
+                if (!_gridSlots[gridX, gridY].IsEmpty())
+                {
+                    occupiedCount++;
+                }
+            }
+
+            return occupiedCount;
+        }
+
         private bool IsValidPosition(int gridX, int gridY)
         {
             return gridX >= 0 && gridX < GRID_WIDTH && gridY >= 0 && gridY < GRID_HEIGHT;
+        }
+
+        private static bool IsQuickSlotPosition(int gridX, int gridY)
+        {
+            return InventoryQuickSlotRules.TryGetQuickSlotIndex(
+                gridX,
+                gridY,
+                GRID_WIDTH,
+                GRID_HEIGHT,
+                out _);
         }
 
         private bool IsTrackedValuableAtCapacity(InventoryItem item, GameManager gameManager)
@@ -494,15 +534,22 @@ namespace Game.Inventory
 
             List<Core.InventorySlotData> snapshot = new List<Core.InventorySlotData>();
 
-            for (int y = 0; y < GRID_HEIGHT; y++)
+            for (int quickSlotIndex = 0; quickSlotIndex < InventoryQuickSlotRules.MaxQuickSlots; quickSlotIndex++)
             {
-                for (int x = 0; x < GRID_WIDTH; x++)
+                if (!InventoryQuickSlotRules.TryGetGridPosition(
+                        quickSlotIndex,
+                        GRID_WIDTH,
+                        GRID_HEIGHT,
+                        out int gridX,
+                        out int gridY))
                 {
-                    InventoryItem item = _gridSlots[x, y].GetItem();
-                    if (item != null && !string.IsNullOrEmpty(item.ItemId))
-                    {
-                        snapshot.Add(new Core.InventorySlotData(x, y, item.ItemId));
-                    }
+                    continue;
+                }
+
+                InventoryItem item = _gridSlots[gridX, gridY].GetItem();
+                if (item != null && !string.IsNullOrEmpty(item.ItemId))
+                {
+                    snapshot.Add(new Core.InventorySlotData(gridX, gridY, item.ItemId));
                 }
             }
 
@@ -530,10 +577,23 @@ namespace Game.Inventory
             int loadedCount = 0;
             int failedCount = 0;
 
+            HashSet<int> restoredQuickSlotIndices = new HashSet<int>();
             foreach (var slotData in savedSlotData)
             {
                 if (slotData == null || string.IsNullOrEmpty(slotData.itemId))
                     continue;
+
+                if (!InventoryQuickSlotRules.TryGetQuickSlotIndex(
+                        slotData.gridX,
+                        slotData.gridY,
+                        GRID_WIDTH,
+                        GRID_HEIGHT,
+                        out int quickSlotIndex)
+                    || !restoredQuickSlotIndices.Add(quickSlotIndex))
+                {
+                    failedCount++;
+                    continue;
+                }
 
                 InventoryItem item = LoadItemAssetById(slotData.itemId);
 
