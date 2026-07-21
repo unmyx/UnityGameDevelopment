@@ -157,6 +157,8 @@ namespace Game.Core
                 { UpgradeIdWeldingTool, new[] { 300 } }
             };
 
+        private static readonly HashSet<string> LoggedRejectedStateTransitions = new HashSet<string>();
+
         private GameStateResolver _stateResolver;
         private GameStateTransitionService _stateTransitionService;
 
@@ -564,7 +566,15 @@ namespace Game.Core
                 return false;
             }
 
-            if (!_stateTransitionService.RefreshStateFromScene(bootstrapState, ref _currentState, ref _currentStateImplementation, out string transitionFailure))
+            bool minigameCleanupCompleted = _currentState != GameState.Minigame
+                                                || MinigameManager.Instance == null
+                                                || !MinigameManager.Instance.IsMinigameActive();
+            if (!_stateTransitionService.RefreshStateFromScene(
+                    bootstrapState,
+                    ref _currentState,
+                    ref _currentStateImplementation,
+                    minigameCleanupCompleted,
+                    out string transitionFailure))
             {
                 FailCriticalSetup($"Failed to enter startup state '{bootstrapState}': {transitionFailure}");
                 return false;
@@ -733,20 +743,46 @@ namespace Game.Core
             return false;
         }
 
-        private void ChangeStateInternal(GameState newState)
+        private bool ChangeStateInternal(GameState newState)
         {
+            EnsureServicesInitialized();
+            if (!_stateTransitionService.CanChangeState(
+                    _currentState,
+                    newState,
+                    out bool isNoOp,
+                    out string policyFailure))
+            {
+                LogRejectedStateTransition(_currentState, newState, policyFailure);
+                return false;
+            }
+
+            if (isNoOp)
+            {
+                return true;
+            }
+
+            if (newState == GameState.Minigame
+                && PauseManager.TryGetInstance(out PauseManager pauseManager)
+                && pauseManager.IsPaused)
+            {
+                LogRejectedStateTransition(_currentState, newState, "Gameplay is paused.");
+                return false;
+            }
+
             RefreshRuntimeBindings();
             if (!TryValidateSceneSetupForState(newState, out string setupFailure))
             {
                 FailCriticalSetup($"Cannot transition to '{newState}': {setupFailure}");
-                return;
+                return false;
             }
 
-            EnsureServicesInitialized();
             if (!_stateTransitionService.ChangeState(newState, ref _currentState, ref _currentStateImplementation, ref _isTransitioning, out string transitionFailure))
             {
                 FailCriticalSetup($"Transition to '{newState}' failed: {transitionFailure}");
+                return false;
             }
+
+            return true;
         }
 
         public void RequestEnterMinigame()
@@ -762,6 +798,21 @@ namespace Game.Core
         public void RequestReturnToMenu()
         {
             ChangeStateInternal(GameState.Menu);
+        }
+
+        private void LogRejectedStateTransition(GameState from, GameState to, string reason)
+        {
+#if UNITY_EDITOR || DEVELOPMENT_BUILD
+            string key = $"{from}->{to}|{reason}";
+            if (!LoggedRejectedStateTransitions.Add(key))
+            {
+                return;
+            }
+
+            Debug.LogWarning(
+                $"[GameManager] Rejected GameState transition from='{from}' to='{to}' reason='{reason}'.",
+                this);
+#endif
         }
 
         public int GetCurrency()

@@ -2,13 +2,13 @@ using System;
 
 namespace Game.Core
 {
-    internal sealed class GameStateResolver
+    public sealed class GameStateResolver
     {
-        private readonly MenuState _menuState;
-        private readonly FreePlayState _freePlayState;
-        private readonly MinigameState _minigameState;
+        private readonly IGameState _menuState;
+        private readonly IGameState _freePlayState;
+        private readonly IGameState _minigameState;
 
-        public GameStateResolver(MenuState menuState, FreePlayState freePlayState, MinigameState minigameState)
+        public GameStateResolver(IGameState menuState, IGameState freePlayState, IGameState minigameState)
         {
             _menuState = menuState;
             _freePlayState = freePlayState;
@@ -68,7 +68,7 @@ namespace Game.Core
                     return false;
             }
 
-            if (implementation == null)
+            if (!IsUsableImplementation(implementation))
             {
                 failureReason = $"Missing required {state} state implementation reference.";
                 return false;
@@ -76,6 +76,16 @@ namespace Game.Core
 
             failureReason = string.Empty;
             return true;
+        }
+
+        public static bool IsUsableImplementation(IGameState implementation)
+        {
+            if (implementation == null)
+            {
+                return false;
+            }
+
+            return !(implementation is UnityEngine.Object unityObject) || unityObject != null;
         }
     }
 }
