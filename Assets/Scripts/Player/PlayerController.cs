@@ -56,11 +56,29 @@ namespace Game.Player
         [SerializeField]
         private float _crouchHeightTransitionSpeed = 10f;
 
+        [SerializeField]
+        [Tooltip("Camera or camera-rig transform whose local Y follows the capsule stance. Auto-resolved from FirstPersonCamera when omitted.")]
+        private Transform _cameraTransform;
+
+        [SerializeField]
+        private float _crouchingCameraY = 0.75f;
+
+        [SerializeField]
+        [Tooltip("Environment layers checked before expanding the capsule back to standing height.")]
+        private LayerMask _standingClearanceMask = ~0;
+
         private Vector3 _velocity = Vector3.zero;
         private float _currentSpeed = 0f;
         private float _timeSinceLastGrounded = 0f;
         private bool _isCrouching = false;
+        private bool _wantsToCrouch;
         private float _targetCharacterHeight;
+        private bool _stanceGeometryInitialized;
+        private Vector3 _standingCenter;
+        private Vector3 _standingCameraLocalPosition;
+        private float _capsuleBottomY;
+        private bool _hasLoggedInvalidStanceConfiguration;
+        private readonly Collider[] _standingClearanceOverlaps = new Collider[16];
 
         private void OnEnable()
         {
@@ -74,6 +92,8 @@ namespace Game.Player
 
         private void OnDisable()
         {
+            StabilizeCurrentStanceGeometry();
+
             if (_characterController != null)
             {
                 _characterController.enabled = false;
@@ -83,7 +103,6 @@ namespace Game.Player
         private void Start()
         {
             InitializeComponents();
-            _targetCharacterHeight = _normalHeight;
         }
 
         private void Update()
@@ -113,14 +132,15 @@ namespace Game.Player
                 {
                     return;
                 }
-
-                _characterController.height = _normalHeight;
             }
 
             if (_inputHandler == null)
             {
                 _inputHandler = GetComponent<PlayerInputHandler>();
             }
+
+            ResolveCameraTransform();
+            InitializeStanceGeometry();
         }
 
         private void HandleInput()
@@ -225,8 +245,12 @@ namespace Game.Player
 
         private void ToggleCrouch()
         {
-            _isCrouching = !_isCrouching;
-            _targetCharacterHeight = _isCrouching ? _crouchHeight : _normalHeight;
+            _wantsToCrouch = !_wantsToCrouch;
+            if (_wantsToCrouch)
+            {
+                _isCrouching = true;
+                _targetCharacterHeight = _crouchHeight;
+            }
         }
 
         private void UpdateCharacterHeight()
@@ -234,14 +258,231 @@ namespace Game.Player
             if (_characterController == null)
                 return;
 
-            float currentHeight = _characterController.height;
-            float heightDifference = _targetCharacterHeight - currentHeight;
-
-            if (Mathf.Abs(heightDifference) > 0.01f)
+            InitializeStanceGeometry();
+            if (!_stanceGeometryInitialized)
             {
-                float newHeight = Mathf.Lerp(currentHeight, _targetCharacterHeight, Time.deltaTime * _crouchHeightTransitionSpeed);
-                _characterController.height = newHeight;
+                return;
             }
+
+            if (_wantsToCrouch)
+            {
+                _targetCharacterHeight = _crouchHeight;
+            }
+            else if (CanStandUp())
+            {
+                _targetCharacterHeight = _normalHeight;
+            }
+            else
+            {
+                _targetCharacterHeight = _crouchHeight;
+            }
+
+            float newHeight = PlayerStanceGeometry.MoveHeight(
+                _characterController.height,
+                _targetCharacterHeight,
+                _crouchHeight,
+                _normalHeight,
+                _crouchHeightTransitionSpeed,
+                Time.deltaTime);
+            ApplyStanceGeometry(newHeight);
+            _isCrouching = _wantsToCrouch || !Mathf.Approximately(newHeight, _normalHeight);
+        }
+
+        public bool CanStandUp()
+        {
+            if (_characterController == null)
+            {
+                return false;
+            }
+
+            InitializeStanceGeometry();
+            if (!_stanceGeometryInitialized
+                || _characterController.height >= _normalHeight - 0.001f)
+            {
+                return true;
+            }
+
+            float radius = Mathf.Max(0.001f, _characterController.radius);
+            Vector3 currentCenter = PlayerStanceGeometry.CenterPreservingBottom(
+                _standingCenter,
+                _normalHeight,
+                _characterController.height);
+            float currentTopSphereY = PlayerStanceGeometry.TopSphereCenterY(
+                currentCenter,
+                _characterController.height,
+                radius);
+            float standingTopSphereY = PlayerStanceGeometry.TopSphereCenterY(
+                _standingCenter,
+                _normalHeight,
+                radius);
+
+            Vector3 currentTopSphere = transform.TransformPoint(
+                new Vector3(currentCenter.x, currentTopSphereY, currentCenter.z));
+            Vector3 standingTopSphere = transform.TransformPoint(
+                new Vector3(_standingCenter.x, standingTopSphereY, _standingCenter.z));
+
+            Vector3 lossyScale = transform.lossyScale;
+            float horizontalScale = Mathf.Max(Mathf.Abs(lossyScale.x), Mathf.Abs(lossyScale.z));
+            float worldRadius = Mathf.Max(
+                0.001f,
+                (radius - Mathf.Min(radius * 0.5f, _characterController.skinWidth)) * horizontalScale);
+
+            int overlapCount = Physics.OverlapCapsuleNonAlloc(
+                currentTopSphere,
+                standingTopSphere,
+                worldRadius,
+                _standingClearanceOverlaps,
+                _standingClearanceMask,
+                QueryTriggerInteraction.Ignore);
+            for (int i = 0; i < overlapCount; i++)
+            {
+                Collider overlap = _standingClearanceOverlaps[i];
+                if (overlap == null || IsOwnCollider(overlap))
+                {
+                    continue;
+                }
+
+                return false;
+            }
+
+            return true;
+        }
+
+        private void InitializeStanceGeometry()
+        {
+            if (_stanceGeometryInitialized || _characterController == null)
+            {
+                return;
+            }
+
+            float originalHeight = PlayerStanceGeometry.NormalizeHeight(
+                _characterController.height,
+                _characterController.radius,
+                _normalHeight);
+            Vector3 originalCenter = _characterController.center;
+            _capsuleBottomY = PlayerStanceGeometry.BottomY(originalCenter, originalHeight);
+
+            float normalizedStandingHeight = PlayerStanceGeometry.NormalizeHeight(
+                _normalHeight,
+                _characterController.radius,
+                originalHeight);
+            float normalizedCrouchingHeight = PlayerStanceGeometry.NormalizeHeight(
+                _crouchHeight,
+                _characterController.radius,
+                normalizedStandingHeight);
+            normalizedCrouchingHeight = Mathf.Min(normalizedCrouchingHeight, normalizedStandingHeight);
+
+            bool invalidConfiguration = !Mathf.Approximately(_normalHeight, normalizedStandingHeight)
+                                        || !Mathf.Approximately(_crouchHeight, normalizedCrouchingHeight)
+                                        || !PlayerStanceGeometry.IsFinite(_crouchHeightTransitionSpeed)
+                                        || _crouchHeightTransitionSpeed < 0f;
+
+            _normalHeight = normalizedStandingHeight;
+            _crouchHeight = normalizedCrouchingHeight;
+            if (!PlayerStanceGeometry.IsFinite(_crouchHeightTransitionSpeed)
+                || _crouchHeightTransitionSpeed < 0f)
+            {
+                _crouchHeightTransitionSpeed = 10f;
+            }
+
+            _standingCenter = originalCenter;
+            _standingCenter.y = _capsuleBottomY + (_normalHeight * 0.5f);
+
+            if (_cameraTransform != null)
+            {
+                _standingCameraLocalPosition = _cameraTransform.localPosition;
+                if (!PlayerStanceGeometry.IsFinite(_crouchingCameraY))
+                {
+                    _crouchingCameraY = _standingCameraLocalPosition.y;
+                    invalidConfiguration = true;
+                }
+
+                _crouchingCameraY = Mathf.Min(_crouchingCameraY, _standingCameraLocalPosition.y);
+            }
+
+            _targetCharacterHeight = _normalHeight;
+            _wantsToCrouch = false;
+            _isCrouching = false;
+            _stanceGeometryInitialized = true;
+            ApplyStanceGeometry(_normalHeight);
+
+            if (invalidConfiguration && !_hasLoggedInvalidStanceConfiguration)
+            {
+                _hasLoggedInvalidStanceConfiguration = true;
+                Debug.LogWarning(
+                    $"[PlayerController] Invalid stance configuration was normalized. " +
+                    $"standingHeight={_normalHeight:0.###}, crouchingHeight={_crouchHeight:0.###}, " +
+                    $"radius={_characterController.radius:0.###}, transitionSpeed={_crouchHeightTransitionSpeed:0.###}.",
+                    this);
+            }
+        }
+
+        private void ApplyStanceGeometry(float height)
+        {
+            if (_characterController == null || !_stanceGeometryInitialized)
+            {
+                return;
+            }
+
+            float normalizedHeight = PlayerStanceGeometry.NormalizeHeight(
+                height,
+                _characterController.radius,
+                _normalHeight);
+            normalizedHeight = Mathf.Clamp(normalizedHeight, _crouchHeight, _normalHeight);
+            _characterController.height = normalizedHeight;
+            _characterController.center = PlayerStanceGeometry.CenterPreservingBottom(
+                _standingCenter,
+                _normalHeight,
+                normalizedHeight);
+
+            if (_cameraTransform == null)
+            {
+                return;
+            }
+
+            Vector3 cameraLocalPosition = _cameraTransform.localPosition;
+            cameraLocalPosition.y = PlayerStanceGeometry.CameraYForHeight(
+                normalizedHeight,
+                _crouchHeight,
+                _normalHeight,
+                _crouchingCameraY,
+                _standingCameraLocalPosition.y);
+            _cameraTransform.localPosition = cameraLocalPosition;
+        }
+
+        private void StabilizeCurrentStanceGeometry()
+        {
+            if (!_stanceGeometryInitialized || _characterController == null)
+            {
+                return;
+            }
+
+            ApplyStanceGeometry(_characterController.height);
+        }
+
+        private void ResolveCameraTransform()
+        {
+            if (_cameraTransform != null)
+            {
+                return;
+            }
+
+            FirstPersonCamera firstPersonCamera = GetComponentInChildren<FirstPersonCamera>(true);
+            if (firstPersonCamera != null)
+            {
+                _cameraTransform = firstPersonCamera.transform;
+            }
+        }
+
+        private bool IsOwnCollider(Collider candidate)
+        {
+            if (candidate == null || candidate == _characterController)
+            {
+                return true;
+            }
+
+            Transform candidateTransform = candidate.transform;
+            return candidateTransform == transform || candidateTransform.IsChildOf(transform);
         }
 
         public bool IsGrounded()
