@@ -57,6 +57,8 @@ namespace Game.Input
         private InputAction _pauseAction;
         private readonly InputAction[] _slotSelectActions = new InputAction[9];
         private readonly bool[] _slotSelectTriggeredThisFrame = new bool[9];
+        private bool _callbacksSubscribed;
+        private bool _isDuplicateInstance;
 
         private Vector2 _currentMoveInput;
         private Vector2 _currentLookInput;
@@ -89,6 +91,8 @@ namespace Game.Input
         {
             if (_instance != null && _instance != this)
             {
+                _isDuplicateInstance = true;
+                enabled = false;
                 Destroy(gameObject);
                 return;
             }
@@ -105,7 +109,7 @@ namespace Game.Input
             }
 
             ValidateConfiguredResourcesOnce();
-            InitializeInputActions();
+            ResolveInputActions();
         }
 
         [System.Diagnostics.Conditional("UNITY_EDITOR")]
@@ -127,17 +131,39 @@ namespace Game.Input
 
         private void OnEnable()
         {
-            if (_inputActionAsset != null)
+            if (_isDuplicateInstance || _inputActionAsset == null)
             {
-                _inputActionAsset.Enable();
+                return;
             }
+
+            SubscribeInputCallbacks();
+            _inputActionAsset.Enable();
         }
 
         private void OnDisable()
         {
+            if (_isDuplicateInstance)
+            {
+                return;
+            }
+
+            UnsubscribeInputCallbacks();
+
             if (_inputActionAsset != null)
             {
                 _inputActionAsset.Disable();
+            }
+
+            ResetCachedInputState();
+        }
+
+        private void OnDestroy()
+        {
+            UnsubscribeInputCallbacks();
+
+            if (_instance == this)
+            {
+                _instance = null;
             }
         }
 
@@ -198,7 +224,7 @@ namespace Game.Input
             }
         }
 
-        private void InitializeInputActions()
+        private void ResolveInputActions()
         {
             if (_inputActionAsset == null)
             {
@@ -213,70 +239,152 @@ namespace Game.Input
                 return;
             }
             _moveAction = _playerActionMap.FindAction("Move");
-            if (_moveAction != null)
-            {
-                _moveAction.performed += ctx => OnMoveInput?.Invoke(ctx.ReadValue<Vector2>());
-            }
-
             _lookAction = _playerActionMap.FindAction("Look");
-            if (_lookAction != null)
-            {
-                _lookAction.performed += ctx => OnLookInput?.Invoke(ctx.ReadValue<Vector2>());
-            }
-
             _jumpAction = _playerActionMap.FindAction("Jump");
-            if (_jumpAction != null)
-            {
-                _jumpAction.performed += ctx => OnJump?.Invoke();
-            }
-
             _interactAction = _playerActionMap.FindAction("Interact");
-            if (_interactAction != null)
-            {
-                _interactAction.performed += ctx =>
-                {
-                    _interactTriggeredThisFrame = true;
-                    OnInteract?.Invoke();
-                };
-            }
-
             _sprintAction = _playerActionMap.FindAction("Sprint");
-            if (_sprintAction != null)
-            {
-                _sprintAction.performed += ctx => OnSprint?.Invoke();
-            }
-
             _crouchAction = _playerActionMap.FindAction("Crouch");
-            if (_crouchAction != null)
-            {
-                _crouchAction.performed += ctx => OnCrouch?.Invoke();
-            }
 
             if (_uiActionMap != null)
             {
                 _pauseAction = _uiActionMap.FindAction("Cancel");
-                if (_pauseAction != null)
-                {
-                    _pauseAction.performed += ctx => OnPause?.Invoke();
-                }
             }
 
             for (int i = 0; i < _slotSelectActions.Length; i++)
             {
-                int slotIndex = i;
-                string actionName = $"SelectSlot{slotIndex + 1}";
-                _slotSelectActions[slotIndex] = _playerActionMap.FindAction(actionName);
+                string actionName = $"SelectSlot{i + 1}";
+                _slotSelectActions[i] = _playerActionMap.FindAction(actionName);
+            }
+        }
 
-                if (_slotSelectActions[slotIndex] != null)
-                {
-                    _slotSelectActions[slotIndex].performed += ctx =>
-                    {
-                        _slotSelectTriggeredThisFrame[slotIndex] = true;
-                        OnSelectSlot?.Invoke(slotIndex);
-                    };
-                }
+        private void SubscribeInputCallbacks()
+        {
+            if (_callbacksSubscribed)
+            {
+                return;
             }
 
+            SubscribePerformed(_moveAction, HandleMovePerformed);
+            SubscribePerformed(_lookAction, HandleLookPerformed);
+            SubscribePerformed(_jumpAction, HandleJumpPerformed);
+            SubscribePerformed(_interactAction, HandleInteractPerformed);
+            SubscribePerformed(_sprintAction, HandleSprintPerformed);
+            SubscribePerformed(_crouchAction, HandleCrouchPerformed);
+            SubscribePerformed(_pauseAction, HandlePausePerformed);
+
+            for (int i = 0; i < _slotSelectActions.Length; i++)
+            {
+                SubscribePerformed(_slotSelectActions[i], HandleSlotSelectPerformed);
+            }
+
+            _callbacksSubscribed = true;
+        }
+
+        private void UnsubscribeInputCallbacks()
+        {
+            if (!_callbacksSubscribed)
+            {
+                return;
+            }
+
+            UnsubscribePerformed(_moveAction, HandleMovePerformed);
+            UnsubscribePerformed(_lookAction, HandleLookPerformed);
+            UnsubscribePerformed(_jumpAction, HandleJumpPerformed);
+            UnsubscribePerformed(_interactAction, HandleInteractPerformed);
+            UnsubscribePerformed(_sprintAction, HandleSprintPerformed);
+            UnsubscribePerformed(_crouchAction, HandleCrouchPerformed);
+            UnsubscribePerformed(_pauseAction, HandlePausePerformed);
+
+            for (int i = 0; i < _slotSelectActions.Length; i++)
+            {
+                UnsubscribePerformed(_slotSelectActions[i], HandleSlotSelectPerformed);
+            }
+
+            _callbacksSubscribed = false;
+        }
+
+        private static void SubscribePerformed(InputAction action, System.Action<InputAction.CallbackContext> callback)
+        {
+            if (action != null)
+            {
+                action.performed += callback;
+            }
+        }
+
+        private static void UnsubscribePerformed(InputAction action, System.Action<InputAction.CallbackContext> callback)
+        {
+            if (action != null)
+            {
+                action.performed -= callback;
+            }
+        }
+
+        private void HandleMovePerformed(InputAction.CallbackContext context)
+        {
+            OnMoveInput?.Invoke(context.ReadValue<Vector2>());
+        }
+
+        private void HandleLookPerformed(InputAction.CallbackContext context)
+        {
+            OnLookInput?.Invoke(context.ReadValue<Vector2>());
+        }
+
+        private void HandleJumpPerformed(InputAction.CallbackContext context)
+        {
+            OnJump?.Invoke();
+        }
+
+        private void HandleInteractPerformed(InputAction.CallbackContext context)
+        {
+            _interactTriggeredThisFrame = true;
+            OnInteract?.Invoke();
+        }
+
+        private void HandleSprintPerformed(InputAction.CallbackContext context)
+        {
+            OnSprint?.Invoke();
+        }
+
+        private void HandleCrouchPerformed(InputAction.CallbackContext context)
+        {
+            OnCrouch?.Invoke();
+        }
+
+        private void HandlePausePerformed(InputAction.CallbackContext context)
+        {
+            OnPause?.Invoke();
+        }
+
+        private void HandleSlotSelectPerformed(InputAction.CallbackContext context)
+        {
+            for (int i = 0; i < _slotSelectActions.Length; i++)
+            {
+                if (_slotSelectActions[i] != context.action)
+                {
+                    continue;
+                }
+
+                _slotSelectTriggeredThisFrame[i] = true;
+                OnSelectSlot?.Invoke(i);
+                return;
+            }
+        }
+
+        private void ResetCachedInputState()
+        {
+            _currentMoveInput = Vector2.zero;
+            _currentLookInput = Vector2.zero;
+            _jumpPressed = false;
+            _interactPressed = false;
+            _interactTriggeredThisFrame = false;
+            _sprintPressed = false;
+            _crouchPressed = false;
+            _pausePressed = false;
+
+            for (int i = 0; i < _slotSelectTriggeredThisFrame.Length; i++)
+            {
+                _slotSelectTriggeredThisFrame[i] = false;
+            }
         }
 
         public Vector2 GetMovementInput()
