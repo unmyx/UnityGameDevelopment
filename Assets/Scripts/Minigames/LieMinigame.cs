@@ -59,6 +59,8 @@ namespace Game.Minigames
         private MinigameResult _pendingResult = MinigameResult.None;
         private bool _pendingFollowUpConfirmRequest;
         private readonly PressReleaseLatch _triggerPressLatch = new();
+        private System.Func<float> _targetRandomSampleProvider;
+        private bool _hasLoggedInvalidTargetWidth;
 
         private enum GameState
         {
@@ -145,6 +147,7 @@ namespace Game.Minigames
             _pendingResult = MinigameResult.None;
             _pendingFollowUpConfirmRequest = false;
             _targetZoneWidth = _baseTargetZoneWidth;
+            _targetZoneCenter = 0.5f;
             _triggerPressLatch.Reset();
         }
 
@@ -200,6 +203,10 @@ namespace Game.Minigames
         {
             _isInputEnabled = false;
             _pendingFollowUpConfirmRequest = false;
+            _pendingResult = MinigameResult.None;
+            _gameState = GameState.Complete;
+            _triggerPressLatch.Reset();
+            _targetRandomSampleProvider = null;
             CleanupUI();
 
             if (_unlockCursorDuringMinigame)
@@ -228,17 +235,26 @@ namespace Game.Minigames
             _indicatorSpeed = GetParameterFloat("indicator_speed", defaultSpeed);
             _maxAttempts = Mathf.Max(1, GetParameterInt("max_attempts", defaultMaxAttempts));
             _showTargetZone = GetParameterBool("show_target_zone", defaultShowTargetZone);
-            _targetZoneCenter = Mathf.Clamp01(GetParameterFloat("target_zone_center", _targetZoneCenter));
-
             if (hasTargetZoneWidthParameter)
             {
-                _baseTargetZoneWidth = Mathf.Clamp01(GetParameterFloat("target_zone_width", defaultTargetZoneWidth));
+                _baseTargetZoneWidth = GetParameterFloat("target_zone_width", defaultTargetZoneWidth);
             }
             else
             {
                 // Preserve existing behavior when no explicit target width is provided.
                 _baseTargetZoneWidth = Mathf.Lerp(0.5f, 0.15f, _difficulty / 10f);
             }
+
+            float normalizedTargetWidth = LieTimingDomain.NormalizeTargetZoneWidth(_baseTargetZoneWidth);
+            if (!AreEquivalent(_baseTargetZoneWidth, normalizedTargetWidth) && !_hasLoggedInvalidTargetWidth)
+            {
+                _hasLoggedInvalidTargetWidth = true;
+                Debug.LogWarning(
+                    $"[LieMinigame] Invalid target zone width '{_baseTargetZoneWidth}' was normalized to {normalizedTargetWidth}.",
+                    this);
+            }
+
+            _baseTargetZoneWidth = normalizedTargetWidth;
 
             _triggerKey = KeyCode.Space;
             _triggerKeyLabel = _triggerKey.ToString().ToUpperInvariant();
@@ -432,7 +448,7 @@ namespace Game.Minigames
             _selectedAnswerSuspicionMultiplier = LieSuspicionMemory.GetSuspicionMultiplier(selected.Id, _suspicionPenaltyPerRepeat, _suspicionMinMultiplier);
 
             float totalMultiplier = selected.ZoneWidthMultiplier * _selectedAnswerSuspicionMultiplier;
-            _targetZoneWidth = Mathf.Clamp01(_baseTargetZoneWidth * totalMultiplier);
+            _targetZoneWidth = LieTimingDomain.NormalizeTargetZoneWidth(_baseTargetZoneWidth * totalMultiplier);
             _selectedAnswerIndex = answerIndex;
             _hasSelectedAnswer = true;
             _selectedAnswerFollowUpText = selected.FollowUpText ?? string.Empty;
@@ -449,11 +465,21 @@ namespace Game.Minigames
         private void StartTimingPhase()
         {
             _attemptsRemaining = _maxAttempts;
-            _indicatorPosition = 0f;
-            _indicatorDirection = 1f;
+            GenerateTargetZone();
+            ResetIndicatorForAttempt();
             _isInputEnabled = true;
             _gameState = GameState.WaitingForPress;
             _triggerPressLatch.Arm(ReadTriggerState());
+        }
+
+        private void GenerateTargetZone()
+        {
+            float randomSample = _targetRandomSampleProvider != null
+                ? _targetRandomSampleProvider()
+                : Random.value;
+            LieTargetZone targetZone = LieTimingDomain.CreateTargetZone(_targetZoneWidth, randomSample);
+            _targetZoneCenter = targetZone.Center;
+            _targetZoneWidth = targetZone.Width;
         }
 
         private int GetParameterInt(string key, int defaultValue)
@@ -552,18 +578,13 @@ namespace Game.Minigames
             if (_gameState == GameState.PressRegistered || _gameState == GameState.Complete)
                 return;
 
-            _indicatorPosition += _indicatorDirection * _indicatorSpeed * Time.deltaTime;
-
-            if (_indicatorPosition >= 1f)
-            {
-                _indicatorPosition = 1f;
-                _indicatorDirection = -1f;
-            }
-            else if (_indicatorPosition <= 0f)
-            {
-                _indicatorPosition = 0f;
-                _indicatorDirection = 1f;
-            }
+            LieIndicatorState indicatorState = LieTimingDomain.StepIndicator(
+                _indicatorPosition,
+                _indicatorDirection,
+                _indicatorSpeed,
+                Time.deltaTime);
+            _indicatorPosition = indicatorState.Position;
+            _indicatorDirection = indicatorState.Direction;
         }
 
         private void HandleInput()
@@ -616,13 +637,11 @@ namespace Game.Minigames
         private void OnPlayerPressed()
         {
             _gameState = GameState.PressRegistered;
-            float distanceFromCenter = Mathf.Abs(_indicatorPosition - _targetZoneCenter);
-            float zoneHalfWidth = Mathf.Max(0.0001f, _targetZoneWidth * 0.5f);
-            bool isInZone = distanceFromCenter <= zoneHalfWidth;
+            LieTargetZone targetZone = GetCurrentTargetZone();
+            bool isInZone = LieTimingDomain.IsIndicatorInZone(_indicatorPosition, targetZone);
+            _accuracy = LieTimingDomain.CalculateAccuracy(_indicatorPosition, targetZone);
 
-            _accuracy = isInZone ? 1f - (distanceFromCenter / zoneHalfWidth) : 0f;
-
-            if (_accuracy > 0f)
+            if (isInZone)
             {
                 _hasSucceeded = true;
                 FinalizeResultOrShowFollowUp(MinigameResult.Pass);
@@ -817,8 +836,21 @@ namespace Game.Minigames
         private void ResetForNextAttempt()
         {
             _gameState = GameState.WaitingForPress;
+            ResetIndicatorForAttempt();
+        }
+
+        private void ResetIndicatorForAttempt()
+        {
             _indicatorPosition = 0f;
             _indicatorDirection = 1f;
+        }
+
+        private void OnDisable()
+        {
+            _isInputEnabled = false;
+            _pendingFollowUpConfirmRequest = false;
+            _triggerPressLatch.Reset();
+            _targetRandomSampleProvider = null;
         }
 
         private void EnsureUI()
@@ -1117,12 +1149,12 @@ namespace Game.Minigames
 
         public float GetTargetZoneStart()
         {
-            return _targetZoneCenter - (_targetZoneWidth * 0.5f);
+            return GetCurrentTargetZone().Start;
         }
 
         public float GetTargetZoneEnd()
         {
-            return _targetZoneCenter + (_targetZoneWidth * 0.5f);
+            return GetCurrentTargetZone().End;
         }
 
         public bool IsIndicatorInZone()
@@ -1130,8 +1162,7 @@ namespace Game.Minigames
             if (!_showTargetZone)
                 return false;
 
-            float distanceFromCenter = Mathf.Abs(_indicatorPosition - _targetZoneCenter);
-            return distanceFromCenter <= (_targetZoneWidth * 0.5f);
+            return LieTimingDomain.IsIndicatorInZone(_indicatorPosition, GetCurrentTargetZone());
         }
 
         public float GetIndicatorPosition()
@@ -1172,6 +1203,18 @@ namespace Game.Minigames
         public bool HasSucceeded()
         {
             return _hasSucceeded;
+        }
+
+        private LieTargetZone GetCurrentTargetZone()
+        {
+            return LieTimingDomain.CreateTargetZoneAtCenter(_targetZoneCenter, _targetZoneWidth);
+        }
+
+        private static bool AreEquivalent(float left, float right)
+        {
+            return LieTimingDomain.IsFinite(left)
+                && LieTimingDomain.IsFinite(right)
+                && Mathf.Approximately(left, right);
         }
 
         private void OnDrawGizmosSelected()

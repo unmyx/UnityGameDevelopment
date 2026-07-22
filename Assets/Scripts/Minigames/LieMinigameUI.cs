@@ -678,7 +678,7 @@ namespace Game.Minigames
 
             float indicatorPos = _lieMinigame.GetIndicatorPosition();
             RectTransform thumbRect = _indicatorThumb.GetComponent<RectTransform>();
-            float xPos = (indicatorPos - 0.5f) * _barWidth;
+            float xPos = NormalizedToBarX(indicatorPos);
             thumbRect.anchoredPosition = new Vector2(xPos, 0f);
             _indicatorThumb.color = _lieMinigame.IsIndicatorInZone() ? new Color(0f, 1f, 0f, 1f) : Color.white;
         }
@@ -698,8 +698,13 @@ namespace Game.Minigames
             zoneRect.anchorMax = new Vector2(0.5f, 0.5f);
 
             float zoneCenter = (zoneStart + zoneEnd) * 0.5f;
-            float xPos = (zoneCenter - 0.5f) * _barWidth;
+            float xPos = NormalizedToBarX(zoneCenter);
             zoneRect.anchoredPosition = new Vector2(xPos, 0f);
+        }
+
+        private float NormalizedToBarX(float normalizedPosition)
+        {
+            return (Mathf.Clamp01(normalizedPosition) - 0.5f) * _barWidth;
         }
 
         private void UpdateAttemptsDisplay()
