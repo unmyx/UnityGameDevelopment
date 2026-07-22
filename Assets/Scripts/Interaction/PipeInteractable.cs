@@ -87,6 +87,7 @@ namespace Game.Interaction
         private bool _hasSubmittedCleaningResult;
         private ToolType _interactionToolSnapshot = ToolType.None;
         private ToolType _pendingNetworkToolSnapshot = ToolType.None;
+        private readonly WarningOnceGate _sceneBindingWarningGate = new WarningOnceGate();
 
         public override void Interact()
         {
@@ -132,6 +133,7 @@ namespace Game.Interaction
             _pendingNetworkStartTaskKey = string.Empty;
             _interactionToolSnapshot = ToolType.None;
             _pendingNetworkToolSnapshot = ToolType.None;
+            _sceneBindingWarningGate.Clear();
             ClearActiveCleaningSession();
         }
 
@@ -142,13 +144,9 @@ namespace Game.Interaction
                 return null;
             }
 
-            if (!TryResolveRequiredReferences(out string validationError))
+            if (!ValidateSceneBindings(out string validationError))
             {
-                Debug.LogError(
-                    $"[PipeInteractable] Blocking cleaning minigame start on '{name}'. " +
-                    $"Context: taskType='{DailyTaskType}', minigameId='{MinigameId}'. " +
-                    $"{validationError}",
-                    this);
+                ReportSceneBindingFailure(validationError);
                 return null;
             }
 
@@ -440,71 +438,65 @@ namespace Game.Interaction
             return string.Join("/", segments);
         }
 
-        private bool TryResolveRequiredReferences(out string validationError)
+        public bool ValidateSceneBindings(out string failureReason)
         {
-            List<string> failures = new List<string>(7);
-            if (_cleaningCanvas == null)
-            {
-                failures.Add(
-                    $"Missing required field '_cleaningCanvas' on '{name}'. " +
-                    "This prefab may intentionally keep UI refs null, but the active scene instance must assign the canvas " +
-                    "or a local child resolver must provide it before start.");
-            }
-
-            if (_timerText == null)
-            {
-                failures.Add(
-                    $"Missing required field '_timerText' on '{name}'. " +
-                    "The active scene instance must assign TimerText or a local child resolver must provide it.");
-            }
-
-            if (_progressText == null)
-            {
-                failures.Add(
-                    $"Missing required field '_progressText' on '{name}'. " +
-                    "The active scene instance must assign ProgressText or a local child resolver must provide it.");
-            }
-
-            if (_worldCleaningSurfaceRoot == null)
-            {
-                failures.Add(
-                    $"Missing required field '_worldCleaningSurfaceRoot' on '{name}' (CleaningSurfaces root). " +
-                    "Scene/prefab instance wiring is incomplete for cleaning task surfaces.");
-            }
-
-            if (_stationCameraPose == null)
-            {
-                failures.Add(
-                    $"Missing required field '_stationCameraPose' on '{name}' (MinigameCameraPose). " +
-                    "Scene/prefab instance wiring is incomplete for cleaning camera handoff.");
-            }
-
-            if (_stationCameraLookTarget == null)
-            {
-                failures.Add(
-                    $"Missing required field '_stationCameraLookTarget' on '{name}' (MinigameLookTarget). " +
-                    "Scene/prefab instance wiring is incomplete for cleaning camera handoff.");
-            }
+            SceneBindingValidation validation = new SceneBindingValidation();
+            validation.Require(
+                _cleaningCanvas != null,
+                $"Missing required field '_cleaningCanvas' on '{name}' (CleaningCanvas)");
+            validation.Require(
+                IsUiTextOnCanvas(_timerText, _cleaningCanvas),
+                $"Missing or invalid required field '_timerText' on '{name}'; assign a TextMeshProUGUI child of CleaningCanvas");
+            validation.Require(
+                IsUiTextOnCanvas(_progressText, _cleaningCanvas),
+                $"Missing or invalid required field '_progressText' on '{name}'; assign a TextMeshProUGUI child of CleaningCanvas");
+            validation.Require(
+                _worldCleaningSurfaceRoot != null,
+                $"Missing required field '_worldCleaningSurfaceRoot' on '{name}' (CleaningSurfaces root)");
+            validation.Require(
+                _stationCameraPose != null,
+                $"Missing required field '_stationCameraPose' on '{name}' (MinigameCameraPose)");
+            validation.Require(
+                _stationCameraLookTarget != null,
+                $"Missing required field '_stationCameraLookTarget' on '{name}' (MinigameLookTarget)");
 
             if (_worldCleaningSurfaceRoot != null)
             {
                 int activeSurfaceCount = CountActiveCleaningSurfaces(_worldCleaningSurfaceRoot);
-                if (activeSurfaceCount <= 0)
-                {
-                    failures.Add(
-                        $"Field '_worldCleaningSurfaceRoot' on '{name}' has zero active collidable surfaces. " +
-                        "Cleaning cannot start without at least one active surface.");
-                }
+                validation.Require(
+                    CleaningSpawnRules.HasRequiredSurfaceCount(activeSurfaceCount),
+                    $"Field '_worldCleaningSurfaceRoot' on '{name}' requires exactly " +
+                    $"{CleaningSpawnRules.RequiredSurfaceCount} active collidable CleaningSurface children, found {activeSurfaceCount}");
             }
 
-            if (failures.Count > 0)
+            bool isValid = validation.Complete(out failureReason);
+            if (isValid)
             {
-                validationError = string.Join("; ", failures);
-                return false;
+                _sceneBindingWarningGate.Clear();
             }
 
-            validationError = string.Empty;
-            return true;
+            return isValid;
+        }
+
+        private void ReportSceneBindingFailure(string failureReason)
+        {
+            if (_sceneBindingWarningGate.ShouldReport(failureReason))
+            {
+                Debug.LogWarning(
+                    $"[PipeInteractable] Blocking cleaning minigame start on '{name}'. " +
+                    $"Context: taskType='{DailyTaskType}', minigameId='{MinigameId}'. {failureReason}",
+                    this);
+            }
+
+            EventBus.Publish(new PlayerFeedbackEvent("Cleaning station is unavailable because its scene setup is incomplete."));
+        }
+
+        private static bool IsUiTextOnCanvas(TMP_Text text, Canvas canvas)
+        {
+            return text is TextMeshProUGUI
+                && canvas != null
+                && text.transform != null
+                && text.transform.IsChildOf(canvas.transform);
         }
 
         private static int CountActiveCleaningSurfaces(Transform surfacesRoot)

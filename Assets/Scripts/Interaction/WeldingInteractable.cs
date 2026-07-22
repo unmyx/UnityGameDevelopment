@@ -94,6 +94,7 @@ namespace Game.Interaction
         private bool _hasSubmittedWeldingResult;
         private ToolType _interactionToolSnapshot = ToolType.None;
         private ToolType _pendingNetworkToolSnapshot = ToolType.None;
+        private readonly WarningOnceGate _sceneBindingWarningGate = new WarningOnceGate();
 
         public override void Interact()
         {
@@ -139,6 +140,7 @@ namespace Game.Interaction
             _pendingNetworkStartTaskKey = string.Empty;
             _interactionToolSnapshot = ToolType.None;
             _pendingNetworkToolSnapshot = ToolType.None;
+            _sceneBindingWarningGate.Clear();
             ClearActiveWeldingSession();
         }
 
@@ -149,13 +151,9 @@ namespace Game.Interaction
                 return null;
             }
 
-            if (!TryResolveRequiredReferences(out string validationError))
+            if (!ValidateSceneBindings(out string validationError))
             {
-                Debug.LogError(
-                    $"[WeldingInteractable] Blocking welding minigame start on '{name}'. " +
-                    $"Context: taskType='{DailyTaskType}', minigameId='{MinigameId}'. " +
-                    $"{validationError}",
-                    this);
+                ReportSceneBindingFailure(validationError);
                 return null;
             }
 
@@ -450,82 +448,85 @@ namespace Game.Interaction
             return string.Join("/", segments);
         }
 
-        private bool TryResolveRequiredReferences(out string validationError)
+        public bool ValidateSceneBindings(out string failureReason)
         {
-            List<string> failures = new List<string>(7);
-            if (_minigameCanvas == null)
+            SceneBindingValidation validation = new SceneBindingValidation();
+            validation.Require(
+                _minigameCanvas != null,
+                $"Missing required field '_minigameCanvas' on '{name}' (WeldingCanvas)");
+            validation.Require(
+                IsImageOnCanvas(_coverageFillImage, _minigameCanvas),
+                $"Missing or invalid required field '_coverageFillImage' on '{name}'; assign an Image child of WeldingCanvas");
+
+            if (_coverageFillImage != null)
             {
-                failures.Add(
-                    $"Missing required field '_minigameCanvas' on '{name}' (WeldingCanvas). " +
-                    "This prefab may intentionally keep UI refs null, but the active scene instance must assign the canvas " +
-                    "or a local child resolver must provide it before start.");
+                validation.Require(
+                    _coverageFillImage.type == Image.Type.Filled
+                    && _coverageFillImage.fillMethod == Image.FillMethod.Horizontal,
+                    $"Field '_coverageFillImage' on '{name}' must be configured as Filled + Horizontal; " +
+                    $"current type={_coverageFillImage.type}, fillMethod={_coverageFillImage.fillMethod}");
             }
 
-            if (_coverageFillImage == null)
-            {
-                failures.Add(
-                    $"Missing required field '_coverageFillImage' on '{name}'. " +
-                    "Welding coverage fill image is required for progress UI and start contract.");
-            }
-            else if (_coverageFillImage.type != Image.Type.Filled || _coverageFillImage.fillMethod != Image.FillMethod.Horizontal)
-            {
-                failures.Add(
-                    $"Field '_coverageFillImage' on '{name}' must be configured as Filled + Horizontal. " +
-                    $"Current type={_coverageFillImage.type}, fillMethod={_coverageFillImage.fillMethod}.");
-            }
+            validation.Require(
+                IsUiTextOnCanvas(_timerText, _minigameCanvas),
+                $"Missing or invalid required field '_timerText' on '{name}'; assign a TextMeshProUGUI child of WeldingCanvas");
+            validation.Require(
+                _weldAnchorsRoot != null,
+                $"Missing required field '_weldAnchorsRoot' on '{name}' (WeldAnchors root)");
 
-            if (_coverageText == null)
+            if (_weldAnchorsRoot != null)
             {
-                Debug.LogWarning(
-                    $"[WeldingInteractable] Optional field '_coverageText' is missing on '{name}'. " +
-                    "Welding can still run, but text coverage feedback UI will be degraded. " +
-                    "Assign it on the scene/prefab instance for full feedback.",
-                    this);
-            }
-
-            if (_timerText == null)
-            {
-                failures.Add(
-                    $"Missing required field '_timerText' on '{name}'. " +
-                    "The active scene instance must assign TimerText or a local child resolver must provide it.");
-            }
-
-            if (_weldAnchorsRoot == null)
-            {
-                failures.Add(
-                    $"Missing required field '_weldAnchorsRoot' on '{name}' (WeldAnchors root). " +
-                    "Scene/prefab instance wiring is incomplete for welding targets.");
-            }
-            else if (CountActiveChildren(_weldAnchorsRoot) == 0)
-            {
-                failures.Add(
-                    $"Field '_weldAnchorsRoot' on '{name}' has zero active children. " +
-                    "Welding cannot start without active weld anchors.");
+                validation.Require(
+                    CountActiveChildren(_weldAnchorsRoot) > 0,
+                    $"Field '_weldAnchorsRoot' on '{name}' has zero active children");
             }
 
             if (_useWorldStationView)
             {
-                if (_stationCameraPose == null)
-                {
-                    failures.Add(
-                        $"Missing required field '_stationCameraPose' on '{name}' while world view is enabled.");
-                }
-
-                if (_stationCameraLookTarget == null)
-                {
-                    failures.Add(
-                        $"Missing required field '_stationCameraLookTarget' on '{name}' while world view is enabled.");
-                }
+                validation.Require(
+                    _stationCameraPose != null,
+                    $"Missing required field '_stationCameraPose' on '{name}' while world view is enabled");
+                validation.Require(
+                    _stationCameraLookTarget != null,
+                    $"Missing required field '_stationCameraLookTarget' on '{name}' while world view is enabled");
             }
 
-            if (failures.Count > 0)
+            bool isValid = validation.Complete(out failureReason);
+            if (isValid)
             {
-                validationError = string.Join("; ", failures);
-                return false;
+                _sceneBindingWarningGate.Clear();
             }
 
-            validationError = string.Empty;
-            return true;
+            return isValid;
+        }
+
+        private void ReportSceneBindingFailure(string failureReason)
+        {
+            if (_sceneBindingWarningGate.ShouldReport(failureReason))
+            {
+                Debug.LogWarning(
+                    $"[WeldingInteractable] Blocking welding minigame start on '{name}'. " +
+                    $"Context: taskType='{DailyTaskType}', minigameId='{MinigameId}'. {failureReason}",
+                    this);
+            }
+
+            EventBus.Publish(new PlayerFeedbackEvent("Welding station is unavailable because its scene setup is incomplete."));
+        }
+
+        private static bool IsImageOnCanvas(Image image, Canvas canvas)
+        {
+            return image != null
+                && canvas != null
+                && image.transform != null
+                && image.transform.IsChildOf(canvas.transform);
+        }
+
+        private static bool IsUiTextOnCanvas(TMP_Text text, Canvas canvas)
+        {
+            return text is TextMeshProUGUI
+                && canvas != null
+                && text.transform != null
+                && text.transform.IsChildOf(canvas.transform);
         }
 
         private static int CountActiveChildren(Transform root)
