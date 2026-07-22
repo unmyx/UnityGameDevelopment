@@ -356,7 +356,7 @@ namespace Game.Minigames
             // This minigame owns timeout behavior to enforce fail+penalty semantics.
             _minigameData.timeLimit = 0f;
 
-            Debug.Log(
+            Game.Core.DevelopmentDiagnostics.Log(
                 $"[CleaningMinigame] Parameters loaded: TimeLimit={_timeLimitSeconds:0.0}s, " +
                 $"TimeoutPenalty={_timeoutCurrencyPenalty}, " +
                 $"RequiredPasses={CleaningToolRules.GetRequiredPasses(ActiveTool)}");

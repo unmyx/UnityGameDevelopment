@@ -447,7 +447,7 @@ namespace Game.Inventory
                 return false;
             }
 
-            Debug.Log(
+            Game.Core.DevelopmentDiagnostics.Log(
                 $"[InventorySystem] Blocked tracked valuable pickup '{item.ItemId}' - at capacity ({trackedValuablesHeld}/{unlockedQuickSlots}).",
                 this);
             return true;
@@ -570,7 +570,7 @@ namespace Game.Inventory
 
             if (savedSlotData == null || savedSlotData.Count == 0)
             {
-                Debug.Log("InventorySystem restored: inventory is empty");
+                Game.Core.DevelopmentDiagnostics.Log("InventorySystem restored: inventory is empty");
                 return;
             }
 
@@ -616,7 +616,7 @@ namespace Game.Inventory
                 }
             }
 
-            Debug.Log($"InventorySystem restored: {loadedCount} items loaded, {failedCount} items failed");
+            Game.Core.DevelopmentDiagnostics.Log($"InventorySystem restored: {loadedCount} items loaded, {failedCount} items failed");
         }
 
         private InventoryItem LoadItemAssetById(string itemId)

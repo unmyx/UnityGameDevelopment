@@ -257,7 +257,7 @@ namespace Game.Core
             if ((hasInventorySystem || hasObjectiveManager) && !_hasLoggedAutoSaveFallbackDependencyLookup)
             {
                 _hasLoggedAutoSaveFallbackDependencyLookup = true;
-                Debug.Log(
+                Game.Core.DevelopmentDiagnostics.Log(
                     $"[PauseManager] Autosave dependency lookup used scene-wide fallback discovery in scene '{SceneManager.GetActiveScene().name}'. " +
                     $"InventorySystem={(hasInventorySystem ? inventorySystem.name : "null")}, ObjectiveManager={(hasObjectiveManager ? objectiveManager.name : "null")}. " +
                     "Behavior remains permissive for bootstrap/recovery compatibility.");

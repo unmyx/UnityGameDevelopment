@@ -101,7 +101,7 @@ namespace Game.Networking
                 }
 
                 gate.ApplyGate();
-                Debug.Log($"[OfflineScenePlayerGate] Disabled offline scene player root '{root.name}' for network session.", root);
+                Game.Core.DevelopmentDiagnostics.Log($"[OfflineScenePlayerGate] Disabled offline scene player root '{root.name}' for network session.", root);
             }
         }
 

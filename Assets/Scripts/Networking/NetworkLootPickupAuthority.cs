@@ -135,7 +135,7 @@ namespace Game.Networking
 
             if (_enableLogs)
             {
-                Debug.Log($"[NetworkLootPickupAuthority] Loot pickup accepted from client {senderClientId}. Granting item '{itemId}' and despawning network loot.");
+                Game.Core.DevelopmentDiagnostics.Log($"[NetworkLootPickupAuthority] Loot pickup accepted from client {senderClientId}. Granting item '{itemId}' and despawning network loot.");
             }
 
             _networkObject.Despawn(true);
@@ -220,7 +220,7 @@ namespace Game.Networking
 
             if (_enableLogs)
             {
-                Debug.Log($"[NetworkLootPickupAuthority] Pickup grant succeeded on client {localClientId} for item '{itemId}'.");
+                Game.Core.DevelopmentDiagnostics.Log($"[NetworkLootPickupAuthority] Pickup grant succeeded on client {localClientId} for item '{itemId}'.");
             }
 
             EventBus.Publish(new ItemPickedUpEvent(itemAsset.ItemName));

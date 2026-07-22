@@ -496,7 +496,7 @@ namespace Game.Networking
             }
 
             _hasLoggedSandboxAudioListenerIntent = true;
-            Debug.Log(
+            Game.Core.DevelopmentDiagnostics.Log(
                 "[NetworkSessionBootstrap] NetworkSandbox bootstrap camera AudioListener is intentionally disabled. " +
                 "Player-owned listeners are enabled by NetworkPlayerOwnershipGate after spawn to avoid duplicate-listener conflicts.",
                 bootstrapCamera);

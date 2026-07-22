@@ -55,7 +55,7 @@ namespace Game.Networking
 
             _consumed = true;
             if (_enableLogs)
-                Debug.Log($"[NetworkSandboxPickupAuthority] Pickup accepted from client {senderClientId}. Despawning pickup.");
+                Game.Core.DevelopmentDiagnostics.Log($"[NetworkSandboxPickupAuthority] Pickup accepted from client {senderClientId}. Despawning pickup.");
 
             _networkObject.Despawn(true);
         }

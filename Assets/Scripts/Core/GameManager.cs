@@ -497,7 +497,7 @@ namespace Game.Core
             Scene activeScene = SceneManager.GetActiveScene();
             if (activeScene.IsValid())
             {
-                Debug.Log(
+                Game.Core.DevelopmentDiagnostics.Log(
                     $"[GameManager] Scene '{activeScene.name}' is bootstrap-only. State initialization is intentionally bypassed.",
                     this);
             }

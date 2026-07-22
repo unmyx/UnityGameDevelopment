@@ -160,7 +160,7 @@ namespace Game.Interaction
             {
                 if (!string.IsNullOrWhiteSpace(response.reason))
                 {
-                    Debug.Log($"[ComputerInteractable] Computer start rejected: {response.reason}", this);
+                    Game.Core.DevelopmentDiagnostics.Log($"[ComputerInteractable] Computer start rejected: {response.reason}", this);
                     EventBus.Publish(new PlayerFeedbackEvent(response.reason.Trim()));
                 }
                 else

@@ -241,7 +241,7 @@ namespace Game.Networking
 
                         if (_enableLogs)
                         {
-                            Debug.Log(
+                            Game.Core.DevelopmentDiagnostics.Log(
                                 $"[NetworkLootSpawnController] Spawned network loot '{normalizedLootType}' at point '{selectedPointId}' for day {day}.",
                                 spawnedLoot);
                         }

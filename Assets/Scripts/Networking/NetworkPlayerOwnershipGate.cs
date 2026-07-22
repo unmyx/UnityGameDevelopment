@@ -200,7 +200,7 @@ namespace Game.Networking
 
             _hasAppliedServerSpawnPlacement = true;
 
-            Debug.Log(
+            Game.Core.DevelopmentDiagnostics.Log(
                 $"[NetworkPlayerOwnershipGate] Server spawn placement applied for client {OwnerClientId} " +
                 $"at {spawnPosition} via {spawnSource}.",
                 this);
@@ -588,7 +588,7 @@ namespace Game.Networking
             }
 
             ulong localClientId = NetworkManager != null ? NetworkManager.LocalClientId : 0UL;
-            Debug.Log(
+            Game.Core.DevelopmentDiagnostics.Log(
                 $"[NetworkPlayerOwnershipGate] client={OwnerClientId} local={localClientId} owner={isOwner} " +
                 $"cameras={enabledCameras}/{totalCameras} listeners={enabledListeners}/{totalListeners}.",
                 this);

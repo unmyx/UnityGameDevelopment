@@ -186,7 +186,7 @@ namespace Game.Core
                 // Write to file
                 System.IO.File.WriteAllText(SaveFilePath, json);
 
-                Debug.Log($"<color=green>Game saved successfully!</color> File: {SaveFilePath}");
+                Game.Core.DevelopmentDiagnostics.Log($"<color=green>Game saved successfully!</color> File: {SaveFilePath}");
                 return true;
             }
             catch (System.Exception e)
@@ -283,7 +283,7 @@ namespace Game.Core
                 RestoreConsumedCollectibles(worldState.consumedCollectibleIds);
                 ApplyConsumedCollectibleStateToScene();
 
-                Debug.Log($"<color=green>Game loaded successfully!</color> File: {SaveFilePath}");
+                Game.Core.DevelopmentDiagnostics.Log($"<color=green>Game loaded successfully!</color> File: {SaveFilePath}");
                 return true;
             }
             catch (System.Exception e)
@@ -410,7 +410,7 @@ namespace Game.Core
                 if (System.IO.File.Exists(SaveFilePath))
                 {
                     System.IO.File.Delete(SaveFilePath);
-                    Debug.Log("<color=yellow>Save file deleted.</color>");
+                    Game.Core.DevelopmentDiagnostics.Log("<color=yellow>Save file deleted.</color>");
                 }
             }
             catch (System.Exception e)

@@ -409,7 +409,7 @@ namespace Game.Core
 
             if (savedData == null)
             {
-                Debug.Log("ObjectiveManager restored: no save data");
+                Game.Core.DevelopmentDiagnostics.Log("ObjectiveManager restored: no save data");
                 return;
             }
 
@@ -470,7 +470,7 @@ namespace Game.Core
             _isMissionComplete = savedData.isMissionComplete;
             _hasPublishedMissionCompleteEvent = false;
 
-            Debug.Log($"ObjectiveManager restored: {restoredCount} objectives loaded, {failedCount} failed");
+            Game.Core.DevelopmentDiagnostics.Log($"ObjectiveManager restored: {restoredCount} objectives loaded, {failedCount} failed");
         }
 
         /// <summary>

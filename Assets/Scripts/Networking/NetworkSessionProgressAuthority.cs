@@ -1905,7 +1905,7 @@ namespace Game.Networking
 
             if (_enableLogs)
             {
-                Debug.Log(
+                Game.Core.DevelopmentDiagnostics.Log(
                     $"[NetworkSessionProgressAuthority] Spawned network drop '{normalizedItemId}' for client {senderClientId} at {worldPosition}.",
                     this);
             }
@@ -2116,7 +2116,7 @@ namespace Game.Networking
             {
                 if (_enableLogs)
                 {
-                    Debug.Log($"[NetworkSessionProgressAuthority] Job start rejected from client {senderClientId}: {blockedReason}");
+                    Game.Core.DevelopmentDiagnostics.Log($"[NetworkSessionProgressAuthority] Job start rejected from client {senderClientId}: {blockedReason}");
                 }
 
                 SendJobInteractableStartResponseClientRpc(
@@ -2264,7 +2264,7 @@ namespace Game.Networking
 
             if (_enableLogs)
             {
-                Debug.Log($"[NetworkSessionProgressAuthority] Job start approved for client {senderClientId}: {taskType}:{taskKey} ({minigameId}).");
+                Game.Core.DevelopmentDiagnostics.Log($"[NetworkSessionProgressAuthority] Job start approved for client {senderClientId}: {taskType}:{taskKey} ({minigameId}).");
             }
 
             SendJobInteractableStartResponseClientRpc(
@@ -2850,7 +2850,7 @@ namespace Game.Networking
             {
                 if (_enableLogs)
                 {
-                    Debug.Log($"[NetworkSessionProgressAuthority] Ignored duplicate minigame reward claim: {claimDedupeKey}");
+                    Game.Core.DevelopmentDiagnostics.Log($"[NetworkSessionProgressAuthority] Ignored duplicate minigame reward claim: {claimDedupeKey}");
                 }
                 return;
             }
@@ -2884,7 +2884,7 @@ namespace Game.Networking
             {
                 if (_enableLogs)
                 {
-                    Debug.Log($"[NetworkSessionProgressAuthority] Ignored duplicate NPC catch registration: {dedupeKey}");
+                    Game.Core.DevelopmentDiagnostics.Log($"[NetworkSessionProgressAuthority] Ignored duplicate NPC catch registration: {dedupeKey}");
                 }
                 return false;
             }

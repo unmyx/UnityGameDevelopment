@@ -99,7 +99,7 @@ namespace Game.Interaction
 
                     if (_logResult && success)
                     {
-                        Debug.Log(
+                        Game.Core.DevelopmentDiagnostics.Log(
                             $"[RunPhaseActionInteractable] Sell processed. soldCount={soldCount}, payout={payoutAmount}.",
                             this);
                     }
@@ -113,7 +113,7 @@ namespace Game.Interaction
 
                     if (_logResult)
                     {
-                        Debug.Log(
+                        Game.Core.DevelopmentDiagnostics.Log(
                             $"[RunPhaseActionInteractable] Purchase processed. upgradeId={_upgradeId}, success={success}, spent={spentCurrency}, resultingTier={resultingTier}.",
                             this);
                     }
@@ -126,7 +126,7 @@ namespace Game.Interaction
 
             if (_logResult)
             {
-                Debug.Log(
+                Game.Core.DevelopmentDiagnostics.Log(
                     $"[RunPhaseActionInteractable] Action={_action} success={success}.",
                     this);
             }

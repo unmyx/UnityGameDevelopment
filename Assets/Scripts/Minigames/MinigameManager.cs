@@ -617,7 +617,7 @@ namespace Game.Minigames
                 }
 
                 _hasLoggedHomeSceneOptionalCanvasInfo = true;
-                Debug.Log(
+                Game.Core.DevelopmentDiagnostics.Log(
                     "[MinigameManager] HomeScene has no gameplay minigame canvases assigned. " +
                     "This is expected for home/staging flow.",
                     this);

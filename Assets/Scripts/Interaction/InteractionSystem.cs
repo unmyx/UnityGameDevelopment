@@ -46,11 +46,11 @@ namespace Game.Interaction
         private LayerMask _raycastLayerMask = -1;
 
         [SerializeField]
-        private bool _showDebugRay = true;
+        private bool _showDebugRay = false;
 
         [Header("Debug")]
         [SerializeField]
-        private bool _enableInteractionLogs = true;
+        private bool _enableInteractionLogs = false;
 
         private InteractionTarget _currentTarget;
         private InteractionTarget _queuedTarget;
@@ -136,7 +136,7 @@ namespace Game.Interaction
                 SetCurrentTarget(default);
                 if (_enableInteractionLogs)
                 {
-                    Debug.Log(
+                    Game.Core.DevelopmentDiagnostics.Log(
                         $"[InteractionSystem] Interact blocked. queuedFrame={queuedFrame}, consumeFrame={Time.frameCount}, reason={blockReason}, queued={GetInteractableDebugName(queuedTarget.Interactable)}");
                 }
 
@@ -154,7 +154,7 @@ namespace Game.Interaction
             {
                 if (_enableInteractionLogs)
                 {
-                    Debug.Log(
+                    Game.Core.DevelopmentDiagnostics.Log(
                         $"[InteractionSystem] Interact skipped: target changed after input. queued={GetInteractableDebugName(queuedTarget.Interactable)}, final={GetInteractableDebugName(finalTarget.Interactable)}");
                 }
 
@@ -163,7 +163,7 @@ namespace Game.Interaction
 
             if (_enableInteractionLogs)
             {
-                Debug.Log(
+                Game.Core.DevelopmentDiagnostics.Log(
                     $"[InteractionSystem] Consuming queued interact. queuedFrame={queuedFrame}, consumeFrame={Time.frameCount}, target={GetInteractableDebugName(finalTarget.Interactable)}");
             }
 
@@ -176,7 +176,7 @@ namespace Game.Interaction
             {
                 if (_enableInteractionLogs)
                 {
-                    Debug.Log(
+                    Game.Core.DevelopmentDiagnostics.Log(
                         $"[InteractionSystem] Interact skipped: resolved target is invalid. target={GetInteractableDebugName(target.Interactable)}");
                 }
 
@@ -190,7 +190,7 @@ namespace Game.Interaction
 
             if (_enableInteractionLogs)
             {
-                Debug.Log($"[InteractionSystem] Calling Interact() on {GetInteractableDebugName(target.Interactable)}.");
+                Game.Core.DevelopmentDiagnostics.Log($"[InteractionSystem] Calling Interact() on {GetInteractableDebugName(target.Interactable)}.");
             }
 
             target.Interactable.Interact();
@@ -212,7 +212,7 @@ namespace Game.Interaction
 
             if (_enableInteractionLogs)
             {
-                Debug.Log($"[InteractionSystem] Routing interaction through network authority bridge for {GetInteractableDebugName(capturedInteractable)}.");
+                Game.Core.DevelopmentDiagnostics.Log($"[InteractionSystem] Routing interaction through network authority bridge for {GetInteractableDebugName(capturedInteractable)}.");
             }
 
             authorityBridge.RequestAuthoritativeInteraction();
@@ -228,7 +228,7 @@ namespace Game.Interaction
 
             Ray ray = new Ray(_raycastCamera.transform.position, _raycastCamera.transform.forward);
             Color rayColor = _currentTarget.Interactable != null ? Color.green : Color.white;
-            Debug.DrawRay(ray.origin, ray.direction * GetEffectiveRaycastRange(), rayColor);
+            DevelopmentDiagnostics.DrawRay(ray.origin, ray.direction * GetEffectiveRaycastRange(), rayColor);
         }
 
         public BaseInteractable GetCurrentInteractable()
@@ -375,7 +375,7 @@ namespace Game.Interaction
 
             if (_enableInteractionLogs)
             {
-                Debug.Log(
+                Game.Core.DevelopmentDiagnostics.Log(
                     $"[InteractionSystem] Interact event fired. eventFrame={inputFrame}, queued={GetInteractableDebugName(_queuedTarget.Interactable)}");
             }
         }

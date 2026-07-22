@@ -618,7 +618,7 @@ namespace Game.Player
 
             bool bootstrapWindow = (Time.realtimeSinceStartup - _startupRealtime) <= BootstrapFallbackGraceSeconds;
             string fallbackWindow = bootstrapWindow ? "bootstrap_window" : "recovery_window";
-            Debug.Log(
+            Game.Core.DevelopmentDiagnostics.Log(
                 $"[PlayerContextLocator] Compatibility fallback used at '{callsite}' in scene '{sceneName}' ({netMode}, {fallbackWindow}). " +
                 "Fallback remains permissive for bootstrap/recovery compatibility. TODO(MP-4): remove after explicit bootstrap/rebind.");
 #endif
@@ -654,7 +654,7 @@ namespace Game.Player
 
             LoggedFallbackDetails.Add(callsite);
             string sceneName = SceneManager.GetActiveScene().name;
-            Debug.Log(
+            Game.Core.DevelopmentDiagnostics.Log(
                 $"[PlayerContextLocator] Fallback scan resolution at '{callsite}' in scene '{sceneName}': " +
                 $"playerController={(playerController != null ? playerController.name : "null")}, " +
                 $"firstPersonCamera={(firstPersonCamera != null ? firstPersonCamera.name : "null")}, " +

@@ -102,8 +102,8 @@ namespace Game.Systems
         [SerializeField] private float lieSuspicionMinMultiplier = 0.6f;
 
         [Header("Debug")]
-        [SerializeField] private bool enableDebugLogs = true;
-        [SerializeField] private bool drawDetectionGizmos = true;
+        [SerializeField] private bool enableDebugLogs = false;
+        [SerializeField] private bool drawDetectionGizmos = false;
 
         private NPCState _state = NPCState.Idle;
         private Vector3 _spawnPosition;
@@ -164,6 +164,7 @@ namespace Game.Systems
         private readonly OffMeshLinkTraversalSession _offMeshLinkTraversal = new OffMeshLinkTraversalSession();
         private readonly HashSet<OffMeshLinkTraversalFailure> _loggedTraversalFailures =
             new HashSet<OffMeshLinkTraversalFailure>();
+        private readonly WarningOnceGate _warningOnce = new WarningOnceGate();
         private Coroutine _offMeshLinkTraversalRoutine;
         private bool _agentWasStoppedBeforeTraversal;
         private bool _isDestroying;
@@ -182,6 +183,8 @@ namespace Game.Systems
         private const float MaxRoamSampleDistance = 1.25f;
         private const float DestinationRefreshThreshold = 0.1f;
         private const float AgentNavPositionSampleRadius = 0.6f;
+        private const string LieStartRejectedWarning = "lie_start_rejected";
+        private const string MissingMinigameManagerWarning = "missing_minigame_manager";
 
         public NPCState CurrentNpcState => _state;
         public ulong CurrentTargetClientId => _activeTargetClientId;
@@ -988,8 +991,11 @@ namespace Game.Systems
             _lastDetectionTarget = detectionTarget;
             _lastDetectionDistance = distanceForRange;
 
-            Debug.DrawRay(detectionOrigin, directionToPlayer * detectionDistance, Color.yellow);
-            Debug.DrawRay(detectionOrigin, detectionForward * Mathf.Min(2f, detectionDistance), Color.cyan);
+            if (drawDetectionGizmos)
+            {
+                DevelopmentDiagnostics.DrawRay(detectionOrigin, directionToPlayer * detectionDistance, Color.yellow);
+                DevelopmentDiagnostics.DrawRay(detectionOrigin, detectionForward * Mathf.Min(2f, detectionDistance), Color.cyan);
+            }
 
             bool isInRange = distanceForRange <= detectionDistance;
             float angleToPlayer = Vector3.Angle(detectionForward, directionForFov);
@@ -1219,11 +1225,13 @@ namespace Game.Systems
             MinigameManager manager = MinigameManager.Instance;
             if (manager != null)
             {
+                _warningOnce.Reset(MissingMinigameManagerWarning);
                 MinigameData data = BuildLieMinigameData();
                 string ownerPlayerId = PlayerInventoryAuthority.GetLocalOwnerPlayerId();
                 IMinigame active = manager.StartMinigame<LieMinigame>(data, ownerPlayerId);
                 if (active != null)
                 {
+                    _warningOnce.Reset(LieStartRejectedWarning);
                     hasCaughtPlayer = true;
                     _awaitingMinigameEnd = true;
                     triggeredMinigame = true;
@@ -1247,7 +1255,10 @@ namespace Game.Systems
                     _awaitingMinigameEnd = false;
                     triggeredMinigame = false;
                     _activeLieMinigameOwnerPlayerId = PlayerContextRegistry.DefaultLocalPlayerId;
-                    Debug.LogWarning("[NPCController] Lie minigame did not start (another minigame may already be active).");
+                    if (_warningOnce.ShouldReport(LieStartRejectedWarning))
+                    {
+                        Debug.LogWarning("[NPCController] Lie minigame did not start (another minigame may already be active).");
+                    }
                 }
             }
             else
@@ -1256,7 +1267,10 @@ namespace Game.Systems
                 _awaitingMinigameEnd = false;
                 triggeredMinigame = false;
                 _activeLieMinigameOwnerPlayerId = PlayerContextRegistry.DefaultLocalPlayerId;
-                Debug.LogWarning("[NPCController] MinigameManager instance not found.");
+                if (_warningOnce.ShouldReport(MissingMinigameManagerWarning))
+                {
+                    Debug.LogWarning("[NPCController] MinigameManager instance not found.");
+                }
             }
         }
 
@@ -2521,6 +2535,8 @@ namespace Game.Systems
             }
         }
 
+        [System.Diagnostics.Conditional("UNITY_EDITOR")]
+        [System.Diagnostics.Conditional("DEVELOPMENT_BUILD")]
         private void Log(string message)
         {
             if (!enableDebugLogs)
@@ -2528,7 +2544,7 @@ namespace Game.Systems
                 return;
             }
 
-            Debug.Log($"[NPCController] {message}");
+            Game.Core.DevelopmentDiagnostics.Log($"[NPCController] {message}");
         }
 
         private bool ShouldRefreshRoamDestination()

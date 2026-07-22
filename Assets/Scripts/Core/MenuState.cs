@@ -80,7 +80,7 @@ namespace Game.Core
                 }
 
                 _hasLoggedExpectedMenuOptionalBindings = true;
-                Debug.Log(
+                Game.Core.DevelopmentDiagnostics.Log(
                     "[MenuState] PlayerInputHandler/FirstPersonCamera bindings are optional in Menu scene and may remain unassigned.",
                     this);
                 return;

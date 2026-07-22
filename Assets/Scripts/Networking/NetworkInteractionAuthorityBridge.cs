@@ -113,7 +113,7 @@ namespace Game.Networking
 
             if (_enableLogs)
             {
-                Debug.Log($"[NetworkInteractionAuthorityBridge] Interaction accepted from client {senderClientId} for object {_networkObject.NetworkObjectId}.");
+                Game.Core.DevelopmentDiagnostics.Log($"[NetworkInteractionAuthorityBridge] Interaction accepted from client {senderClientId} for object {_networkObject.NetworkObjectId}.");
             }
 
             _handler.ProcessAuthoritativeInteraction(senderClientId, senderPlayerTransform);
@@ -246,7 +246,7 @@ namespace Game.Networking
         {
             if (_enableLogs)
             {
-                Debug.Log($"[NetworkInteractionAuthorityBridge] Interaction rejected from client {senderClientId}: {rejectReason}");
+                Game.Core.DevelopmentDiagnostics.Log($"[NetworkInteractionAuthorityBridge] Interaction rejected from client {senderClientId}: {rejectReason}");
             }
         }
     }
