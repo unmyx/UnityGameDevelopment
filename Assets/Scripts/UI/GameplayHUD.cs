@@ -110,6 +110,20 @@ namespace Game.UI
         private int _currentRunPhase = -1;
         private int _currentWorkMinute = -1;
         private string _lastObjectivesDisplay = string.Empty;
+        private GameManager _objectivesDisplayGameManager;
+        private bool _hasObjectivesDisplaySnapshot;
+        private int _displayedCleaningCompleted;
+        private int _displayedCleaningTotal;
+        private int _displayedWeldingCompleted;
+        private int _displayedWeldingTotal;
+        private int _displayedMeasureCutCompleted;
+        private int _displayedMeasureCutTotal;
+        private int _displayedPipePaintCompleted;
+        private int _displayedPipePaintTotal;
+        private int _displayedDrillScrewCompleted;
+        private int _displayedDrillScrewTotal;
+        private bool _displayedHasNextWave;
+        private int _displayedNextWaveSeconds;
         private float _feedbackTimeRemaining;
         private string _lastFeedbackMessage = string.Empty;
         private bool _hasLoggedMissingPromptText;
@@ -235,7 +249,7 @@ namespace Game.UI
             bool shouldShowCrosshair = showGameplayHud && IsFreeGameplayUnpaused();
             if (_crosshairText != null)
             {
-                _crosshairText.gameObject.SetActive(shouldShowCrosshair);
+                SetActiveIfChanged(_crosshairText.gameObject, shouldShowCrosshair);
             }
 
             UpdateInteractionPromptVisibility(shouldShowCrosshair);
@@ -277,9 +291,21 @@ namespace Game.UI
         {
             if (_hudContainerCanvasGroup != null)
             {
-                _hudContainerCanvasGroup.alpha = showGameplayHud ? 1f : 0f;
-                _hudContainerCanvasGroup.interactable = false;
-                _hudContainerCanvasGroup.blocksRaycasts = false;
+                float targetAlpha = showGameplayHud ? 1f : 0f;
+                if (!Mathf.Approximately(_hudContainerCanvasGroup.alpha, targetAlpha))
+                {
+                    _hudContainerCanvasGroup.alpha = targetAlpha;
+                }
+
+                if (_hudContainerCanvasGroup.interactable)
+                {
+                    _hudContainerCanvasGroup.interactable = false;
+                }
+
+                if (_hudContainerCanvasGroup.blocksRaycasts)
+                {
+                    _hudContainerCanvasGroup.blocksRaycasts = false;
+                }
             }
 
             SetOptionalGroupActive(_alwaysVisibleHudBlock, showGameplayHud);
@@ -480,6 +506,8 @@ namespace Game.UI
 
             if (gameManager.GetCurrentRunPhase() != GameManager.RunPhase.Work)
             {
+                _hasObjectivesDisplaySnapshot = false;
+                _objectivesDisplayGameManager = gameManager;
                 string homeDisplay = string.Empty;
                 if (_lastObjectivesDisplay == homeDisplay)
                 {
@@ -505,8 +533,45 @@ namespace Game.UI
                 out bool hasNextWave,
                 out float nextWaveEtaSeconds);
 
+            int nextWaveSeconds = hasNextWave
+                ? Mathf.CeilToInt(Mathf.Max(0f, nextWaveEtaSeconds))
+                : -1;
+            bool displayStateUnchanged = _hasObjectivesDisplaySnapshot
+                                         && ReferenceEquals(_objectivesDisplayGameManager, gameManager)
+                                         && _displayedCleaningCompleted == cleaningCompleted
+                                         && _displayedCleaningTotal == cleaningTotal
+                                         && _displayedWeldingCompleted == weldingCompleted
+                                         && _displayedWeldingTotal == weldingTotal
+                                         && _displayedMeasureCutCompleted == measureCutCompleted
+                                         && _displayedMeasureCutTotal == measureCutTotal
+                                         && _displayedPipePaintCompleted == pipePaintCompleted
+                                         && _displayedPipePaintTotal == pipePaintTotal
+                                         && _displayedDrillScrewCompleted == drillScrewCompleted
+                                         && _displayedDrillScrewTotal == drillScrewTotal
+                                         && _displayedHasNextWave == hasNextWave
+                                         && _displayedNextWaveSeconds == nextWaveSeconds;
+            if (displayStateUnchanged)
+            {
+                return;
+            }
+
+            _objectivesDisplayGameManager = gameManager;
+            _hasObjectivesDisplaySnapshot = true;
+            _displayedCleaningCompleted = cleaningCompleted;
+            _displayedCleaningTotal = cleaningTotal;
+            _displayedWeldingCompleted = weldingCompleted;
+            _displayedWeldingTotal = weldingTotal;
+            _displayedMeasureCutCompleted = measureCutCompleted;
+            _displayedMeasureCutTotal = measureCutTotal;
+            _displayedPipePaintCompleted = pipePaintCompleted;
+            _displayedPipePaintTotal = pipePaintTotal;
+            _displayedDrillScrewCompleted = drillScrewCompleted;
+            _displayedDrillScrewTotal = drillScrewTotal;
+            _displayedHasNextWave = hasNextWave;
+            _displayedNextWaveSeconds = nextWaveSeconds;
+
             string waveSummary = hasNextWave
-                ? $"Next task in: {Mathf.CeilToInt(Mathf.Max(0f, nextWaveEtaSeconds))}s"
+                ? $"Next task in: {nextWaveSeconds}s"
                 : "No more work today";
 
             string objectivesList =
@@ -695,7 +760,7 @@ namespace Game.UI
                 && _interactionSystem != null
                 && _interactionSystem.CanInteractWithCurrent();
 
-            _interactionPromptText.gameObject.SetActive(shouldShowPrompt);
+            SetActiveIfChanged(_interactionPromptText.gameObject, shouldShowPrompt);
         }
 
         private void TryResolveInteractionSystemFromLocalContext()
@@ -792,32 +857,37 @@ namespace Game.UI
         {
             if (_workOnlyHudBlock != null)
             {
-                _workOnlyHudBlock.SetActive(showWorkHud);
+                SetActiveIfChanged(_workOnlyHudBlock, showWorkHud);
                 return;
             }
 
             if (_runPhaseText != null)
             {
-                _runPhaseText.gameObject.SetActive(showWorkHud);
+                SetActiveIfChanged(_runPhaseText.gameObject, showWorkHud);
             }
 
             if (_objectivesPanelObject != null)
             {
-                _objectivesPanelObject.SetActive(showWorkHud);
+                SetActiveIfChanged(_objectivesPanelObject, showWorkHud);
                 return;
             }
 
             if (_objectivesText != null)
             {
-                _objectivesText.gameObject.SetActive(showWorkHud);
+                SetActiveIfChanged(_objectivesText.gameObject, showWorkHud);
             }
         }
 
         private static void SetOptionalGroupActive(GameObject group, bool isActive)
         {
-            if (group != null)
+            SetActiveIfChanged(group, isActive);
+        }
+
+        private static void SetActiveIfChanged(GameObject target, bool isActive)
+        {
+            if (target != null && target.activeSelf != isActive)
             {
-                group.SetActive(isActive);
+                target.SetActive(isActive);
             }
         }
 

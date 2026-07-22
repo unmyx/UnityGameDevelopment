@@ -45,6 +45,11 @@ namespace Game.Minigames
         private float _feedbackDisplayTime;
         private const float FeedbackDuration = 1.5f;
         private bool _uiInitialized;
+        private float _displayedTargetZoneStart = float.NaN;
+        private float _displayedTargetZoneEnd = float.NaN;
+        private int _displayedAttemptsRemaining = int.MinValue;
+        private int _displayedMaxAttempts = int.MinValue;
+        private string _continueButtonLabel = string.Empty;
 
         public void Initialize(LieMinigame lieMinigame, Canvas canvas)
         {
@@ -52,6 +57,7 @@ namespace Game.Minigames
             _canvas = canvas;
             _feedbackDisplayTime = 0f;
             _uiInitialized = false;
+            ResetDynamicDisplayCache();
             FindOrSetupUI();
         }
 
@@ -66,6 +72,8 @@ namespace Game.Minigames
             {
                 _feedbackText.text = string.Empty;
             }
+
+            ResetDynamicDisplayCache();
         }
 
         private void FindOrSetupUI()
@@ -532,12 +540,12 @@ namespace Game.Minigames
 
             if (_dialoguePanelRect != null)
             {
-                _dialoguePanelRect.gameObject.SetActive(showDialoguePanel);
+                SetActiveIfChanged(_dialoguePanelRect.gameObject, showDialoguePanel);
             }
 
             if (_timingPanelRect != null)
             {
-                _timingPanelRect.gameObject.SetActive(!showDialoguePanel);
+                SetActiveIfChanged(_timingPanelRect.gameObject, !showDialoguePanel);
             }
         }
 
@@ -554,7 +562,7 @@ namespace Game.Minigames
 
             if (_questionText != null)
             {
-                _questionText.text = _lieMinigame.GetQuestionText();
+                SetTextIfChanged(_questionText, _lieMinigame.GetQuestionText());
             }
 
             if (showingFollowUp)
@@ -565,13 +573,13 @@ namespace Game.Minigames
 
                     if (_answerButtons[i] != null)
                     {
-                        _answerButtons[i].gameObject.SetActive(isContinueButton);
-                        _answerButtons[i].interactable = isContinueButton;
+                        SetActiveIfChanged(_answerButtons[i].gameObject, isContinueButton);
+                        SetInteractableIfChanged(_answerButtons[i], isContinueButton);
                     }
 
                     if (isContinueButton && _answerButtonTexts[i] != null)
                     {
-                        _answerButtonTexts[i].text = $"Continue ({_lieMinigame.GetTriggerKeyDisplayName()})";
+                        SetTextIfChanged(_answerButtonTexts[i], _continueButtonLabel);
                     }
                 }
 
@@ -587,15 +595,15 @@ namespace Game.Minigames
                 bool isAvailable = i < answerCount;
                 if (_answerButtons[i] != null)
                 {
-                    _answerButtons[i].gameObject.SetActive(isAvailable);
-                    _answerButtons[i].interactable = waitingForAnswer || waitingForPostResultAnswer;
+                    SetActiveIfChanged(_answerButtons[i].gameObject, isAvailable);
+                    SetInteractableIfChanged(_answerButtons[i], waitingForAnswer || waitingForPostResultAnswer);
                 }
 
                 if (isAvailable && _answerButtonTexts[i] != null)
                 {
-                    _answerButtonTexts[i].text = waitingForPostResultAnswer
+                    SetTextIfChanged(_answerButtonTexts[i], waitingForPostResultAnswer
                         ? _lieMinigame.GetPostResultAnswerText(i)
-                        : _lieMinigame.GetAnswerText(i);
+                        : _lieMinigame.GetAnswerText(i));
                 }
             }
         }
@@ -690,6 +698,14 @@ namespace Game.Minigames
 
             float zoneStart = _lieMinigame.GetTargetZoneStart();
             float zoneEnd = _lieMinigame.GetTargetZoneEnd();
+            if (Mathf.Approximately(_displayedTargetZoneStart, zoneStart)
+                && Mathf.Approximately(_displayedTargetZoneEnd, zoneEnd))
+            {
+                return;
+            }
+
+            _displayedTargetZoneStart = zoneStart;
+            _displayedTargetZoneEnd = zoneEnd;
             float zoneWidth = (zoneEnd - zoneStart) * _barWidth;
 
             RectTransform zoneRect = _targetZoneImage.GetComponent<RectTransform>();
@@ -714,6 +730,13 @@ namespace Game.Minigames
 
             int attemptsRemaining = _lieMinigame.GetAttemptsRemaining();
             int maxAttempts = Mathf.Max(1, _lieMinigame.GetMaxAttempts());
+            if (_displayedAttemptsRemaining == attemptsRemaining && _displayedMaxAttempts == maxAttempts)
+            {
+                return;
+            }
+
+            _displayedAttemptsRemaining = attemptsRemaining;
+            _displayedMaxAttempts = maxAttempts;
             int attemptsUsed = maxAttempts - attemptsRemaining;
 
             _attemptsText.text = $"Attempts: {attemptsUsed}/{maxAttempts}";
@@ -750,7 +773,42 @@ namespace Game.Minigames
             if (_promptText == null || _lieMinigame == null)
                 return;
 
-            _promptText.text = $"Press {_lieMinigame.GetTriggerKeyDisplayName()} when indicator enters green zone";
+            string triggerKeyDisplayName = _lieMinigame.GetTriggerKeyDisplayName();
+            _continueButtonLabel = $"Continue ({triggerKeyDisplayName})";
+            SetTextIfChanged(_promptText, $"Press {triggerKeyDisplayName} when indicator enters green zone");
+        }
+
+        private void ResetDynamicDisplayCache()
+        {
+            _displayedTargetZoneStart = float.NaN;
+            _displayedTargetZoneEnd = float.NaN;
+            _displayedAttemptsRemaining = int.MinValue;
+            _displayedMaxAttempts = int.MinValue;
+        }
+
+        private static void SetActiveIfChanged(GameObject target, bool isActive)
+        {
+            if (target != null && target.activeSelf != isActive)
+            {
+                target.SetActive(isActive);
+            }
+        }
+
+        private static void SetInteractableIfChanged(Selectable selectable, bool interactable)
+        {
+            if (selectable != null && selectable.interactable != interactable)
+            {
+                selectable.interactable = interactable;
+            }
+        }
+
+        private static void SetTextIfChanged(TMP_Text target, string value)
+        {
+            string normalizedValue = value ?? string.Empty;
+            if (target != null && !string.Equals(target.text, normalizedValue, System.StringComparison.Ordinal))
+            {
+                target.text = normalizedValue;
+            }
         }
 
         private string GetFeedbackMessage(float accuracy, MinigameResult result)
