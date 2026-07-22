@@ -183,6 +183,7 @@ namespace Game.Minigames
             _hasProcessedTimeoutFailure = false;
             _remainingTimeSeconds = _timeLimitSeconds;
             UpdateTimerUI();
+            UpdateToolUI();
 
             if (!TryStartWorldPresentation())
             {
@@ -238,20 +239,7 @@ namespace Game.Minigames
             TearDownWorldViewPresentation();
             SetPlayerMovementFrozen(false);
 
-            if (_timerText != null)
-            {
-                _timerText.text = string.Empty;
-            }
-
-            if (_progressText != null)
-            {
-                _progressText.text = string.Empty;
-            }
-            
-            if (_toolText != null)
-            {
-                _toolText.text = string.Empty;
-            }
+            ClearAssignedUiText();
 
             _isUsingWorldPresentation = false;
             _isFinishing = false;
@@ -269,6 +257,8 @@ namespace Game.Minigames
             {
                 SetResult(MinigameResult.Fail);
             }
+
+            ClearAssignedUiText();
         }
 
         private void LoadParameters()
@@ -1725,7 +1715,25 @@ namespace Game.Minigames
                 return;
             }
 
-            _toolText.text = $"Tool: {_cleaningToolLabel} (x{_cleaningToolEffectivenessMultiplier:0.00})";
+            _toolText.text = $"Tool: {_cleaningToolLabel}";
+        }
+
+        private void ClearAssignedUiText()
+        {
+            if (_timerText != null)
+            {
+                _timerText.text = string.Empty;
+            }
+
+            if (_progressText != null)
+            {
+                _progressText.text = string.Empty;
+            }
+
+            if (_toolText != null)
+            {
+                _toolText.text = string.Empty;
+            }
         }
 
         private void LockCursor()

@@ -95,7 +95,7 @@ namespace Game.Minigames
                 return;
             }
 
-            _computerCanvas.enabled = false;
+            SetCanvasVisible(false);
             ResolveGameplayViewCamera();
             ResolveUiController();
             RefreshUiRuntimeState();
@@ -110,10 +110,7 @@ namespace Game.Minigames
                 return;
             }
 
-            if (_computerCanvas != null)
-            {
-                _computerCanvas.enabled = true;
-            }
+            SetCanvasVisible(true);
 
             if (_unlockCursorDuringMinigame)
             {
@@ -172,10 +169,7 @@ namespace Game.Minigames
                 _uiController.Hide();
             }
 
-            if (_computerCanvas != null)
-            {
-                _computerCanvas.enabled = false;
-            }
+            SetCanvasVisible(false);
 
             if (_unlockCursorDuringMinigame)
             {
@@ -195,6 +189,24 @@ namespace Game.Minigames
             _isFinishing = false;
             _isReturningToGameplayView = false;
             _pendingResult = MinigameResult.None;
+        }
+
+        private void OnDisable()
+        {
+            SetCanvasVisible(false);
+        }
+
+        private void SetCanvasVisible(bool visible)
+        {
+            if (_computerCanvas != null)
+            {
+                _computerCanvas.enabled = visible;
+            }
+
+            if (!visible && _uiController != null)
+            {
+                _uiController.Hide();
+            }
         }
 
         private void LoadParameters()
