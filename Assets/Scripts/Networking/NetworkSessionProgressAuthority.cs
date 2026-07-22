@@ -3247,8 +3247,7 @@ namespace Game.Networking
             bool pendingLie,
             ClientRpcParams clientRpcParams = default)
         {
-            string dedupeKey = BuildNpcCatchDedupeKey(ownerKey, catchToken);
-            if (string.IsNullOrWhiteSpace(dedupeKey) || !ConsumedNpcCatchKeys.Add(dedupeKey))
+            if (!TryConsumeNpcCatch(ownerKey, catchToken))
             {
                 return;
             }
@@ -3264,16 +3263,13 @@ namespace Game.Networking
             };
 
             OnNpcCatchTriggeredResponse?.Invoke(response);
-
-            EventBus.Publish(new NpcCatchTriggeredEvent(
-                response.ownerKey,
-                response.targetClientId,
-                response.catchToken,
-                response.npcNetworkObjectId,
-                response.serverTime,
-                response.pendingLie));
-
             TryBeginLocalLieMinigameFromCatch(response);
+        }
+
+        private static bool TryConsumeNpcCatch(string ownerKey, ulong catchToken)
+        {
+            string dedupeKey = BuildNpcCatchDedupeKey(ownerKey, catchToken);
+            return !string.IsNullOrWhiteSpace(dedupeKey) && ConsumedNpcCatchKeys.Add(dedupeKey);
         }
 
         [ClientRpc]
