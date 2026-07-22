@@ -167,12 +167,16 @@ namespace Game.Systems
         private Coroutine _offMeshLinkTraversalRoutine;
         private bool _agentWasStoppedBeforeTraversal;
         private bool _isDestroying;
+        private readonly NpcRepathScheduler _repathScheduler = new NpcRepathScheduler();
+        private readonly NpcPathRecoveryTracker _pathRecoveryTracker = new NpcPathRecoveryTracker();
+        private readonly NpcRoamingRetryState _roamingRetryState = new NpcRoamingRetryState();
+        private bool _wasOffMeshLinkTraversalActive;
+        private float _roamingPathIssueElapsed;
         private int _ownerCatchStateDay = -1;
 
         private readonly Dictionary<string, NpcCatchStateRuntime> _ownerCatchStates =
             new Dictionary<string, NpcCatchStateRuntime>(System.StringComparer.Ordinal);
 
-        private const int RoamTargetAttempts = 12;
         private const float FreezeProbeDistanceTolerance = 0.05f;
         private const float MinRoamSampleDistance = 0.5f;
         private const float MaxRoamSampleDistance = 1.25f;
@@ -184,6 +188,20 @@ namespace Game.Systems
         public ulong CurrentCatchToken => _lastIssuedCatchToken;
         public float CurrentLastCatchServerTime => _lastCatchServerTime;
         public string CurrentLastCatchOwnerKey => _lastCatchOwnerKey;
+        public float CurrentMovementSpeed
+        {
+            get
+            {
+                if (_agent == null || !_agent.enabled || !_agent.gameObject.activeInHierarchy)
+                {
+                    return 0f;
+                }
+
+                float speed = _agent.velocity.magnitude;
+                return NpcPathingPolicy.IsFinite(speed) ? speed : 0f;
+            }
+        }
+        public bool IsMoving => CurrentMovementSpeed > NpcPathingPolicy.ArrivalVelocityThreshold;
         public bool IsCaughtOrCooldownActive =>
             hasCaughtPlayer
             || _awaitingMinigameEnd
@@ -274,6 +292,7 @@ namespace Game.Systems
         private void OnEnable()
         {
             _isDestroying = false;
+            ResetNpcPathingLifecycle();
             ConfigureManualOffMeshLinkTraversal();
             EventBus.Subscribe<MinigameEndedEvent>(OnMinigameEnded);
             EventBus.Subscribe<MinigameCancelledEvent>(OnMinigameCancelled);
@@ -282,6 +301,7 @@ namespace Game.Systems
         private void OnDisable()
         {
             CancelOffMeshLinkTraversal();
+            ResetNpcPathingLifecycle();
             EventBus.Unsubscribe<MinigameEndedEvent>(OnMinigameEnded);
             EventBus.Unsubscribe<MinigameCancelledEvent>(OnMinigameCancelled);
         }
@@ -290,6 +310,7 @@ namespace Game.Systems
         {
             _isDestroying = true;
             CancelOffMeshLinkTraversal();
+            ResetNpcPathingLifecycle();
         }
 
         private void Update()
@@ -297,6 +318,7 @@ namespace Game.Systems
             if (!CanRunAuthoritativeUpdate())
             {
                 CancelOffMeshLinkTraversal();
+                ResetNpcPathingLifecycle();
                 StopAgent();
                 return;
             }
@@ -323,11 +345,17 @@ namespace Game.Systems
 
             if (_offMeshLinkTraversal.IsActive)
             {
+                _wasOffMeshLinkTraversalActive = true;
+                UpdateIntendedTargetDuringTraversal();
                 return;
             }
 
+            HandleCompletedOffMeshLinkTraversal();
+
             if (TryStartOffMeshLinkTraversal())
             {
+                _wasOffMeshLinkTraversalActive = true;
+                UpdateIntendedTargetDuringTraversal();
                 return;
             }
 
@@ -564,10 +592,54 @@ namespace Game.Systems
             if (!hasMovementAuthority)
             {
                 CancelOffMeshLinkTraversal();
+                ResetNpcPathingLifecycle();
                 return;
             }
 
+            ResetNpcPathingLifecycle();
             ConfigureManualOffMeshLinkTraversal();
+        }
+
+        private void ResetNpcPathingLifecycle()
+        {
+            _repathScheduler.Reset();
+            _pathRecoveryTracker.Reset();
+            _roamingRetryState.Reset();
+            _wasOffMeshLinkTraversalActive = false;
+            _roamingPathIssueElapsed = 0f;
+            _losePlayerTimer = 0f;
+            _isSearchingLastKnownPosition = false;
+            _hasLastKnownPlayerPosition = false;
+            _hasRoamTarget = false;
+            _isRoamPaused = false;
+            _roamPauseTimer = 0f;
+            _hasLastLoggedDestination = false;
+        }
+
+        private void UpdateIntendedTargetDuringTraversal()
+        {
+            if (_state != NPCState.Chasing)
+            {
+                return;
+            }
+
+            Transform runtimeTarget = GetRuntimeTargetTransform();
+            if (runtimeTarget != null && NpcPathingPolicy.IsValidDestination(runtimeTarget.position))
+            {
+                _lastKnownPlayerPosition = runtimeTarget.position;
+                _hasLastKnownPlayerPosition = true;
+            }
+        }
+
+        private void HandleCompletedOffMeshLinkTraversal()
+        {
+            if (!_wasOffMeshLinkTraversalActive || _offMeshLinkTraversal.IsActive)
+            {
+                return;
+            }
+
+            _wasOffMeshLinkTraversalActive = false;
+            _repathScheduler.InvalidateDestination();
         }
 
         [System.Diagnostics.Conditional("UNITY_EDITOR")]
@@ -594,8 +666,8 @@ namespace Game.Systems
             _idleTimer += Time.deltaTime;
             if (_idleTimer >= roamDelay)
             {
-                TryPickRoamTarget();
                 ChangeState(NPCState.Roaming);
+                TryPickRoamTarget();
             }
         }
 
@@ -608,35 +680,65 @@ namespace Game.Systems
                 return;
             }
 
-            if (!_hasRoamTarget)
-            {
-                TryPickRoamTarget();
-                return;
-            }
-
             if (_isRoamPaused)
             {
                 _roamPauseTimer -= Time.deltaTime;
                 if (_roamPauseTimer <= 0f)
                 {
                     _isRoamPaused = false;
+                    if (_roamingRetryState.CanSelect(Time.time, _offMeshLinkTraversal.IsActive, _hasRoamTarget))
+                    {
+                        TryPickRoamTarget();
+                    }
+                }
+
+                return;
+            }
+
+            if (!_hasRoamTarget)
+            {
+                if (_roamingRetryState.CanSelect(Time.time, _offMeshLinkTraversal.IsActive, false))
+                {
                     TryPickRoamTarget();
                 }
 
                 return;
             }
 
+            NpcPathState pathState = GetCurrentPathState();
+            if (pathState == NpcPathState.None
+                || pathState == NpcPathState.Partial
+                || pathState == NpcPathState.Invalid)
+            {
+                _roamingPathIssueElapsed += Time.deltaTime;
+                if (_roamingPathIssueElapsed >= NpcPathingPolicy.RoamingRetrySeconds)
+                {
+                    InvalidateRoamingTargetForRetry();
+                }
+
+                return;
+            }
+
+            _roamingPathIssueElapsed = 0f;
+
             if (ShouldRefreshRoamDestination())
             {
-                SetAgentDestination(_roamTarget, "Roaming");
+                TrySetAgentDestination(_roamTarget, "Roaming", pathNeedsRepair: true);
+                if (_repathScheduler.ConsecutiveFailures >= NpcPathingPolicy.MaximumConsecutiveFailures)
+                {
+                    InvalidateRoamingTargetForRetry();
+                    return;
+                }
             }
 
             bool reached = HasReachedDestination();
             if (reached)
             {
                 StopAgent();
+                _hasRoamTarget = false;
                 _isRoamPaused = true;
                 _roamPauseTimer = roamArriveDelay;
+                _repathScheduler.Reset();
             }
         }
 
@@ -728,15 +830,31 @@ namespace Game.Systems
             bool isPlayerDetected = DetectPlayer();
             if (isPlayerDetected)
             {
+                if (_pathRecoveryTracker.TargetUnavailableElapsed > 0f || _isSearchingLastKnownPosition)
+                {
+                    _pathRecoveryTracker.ResetForTargetAcquired();
+                    _repathScheduler.InvalidateDestination();
+                }
+
                 _losePlayerTimer = 0f;
                 _isSearchingLastKnownPosition = false;
 
                 Transform runtimeTarget = GetRuntimeTargetTransform();
-                if (runtimeTarget != null)
+                if (runtimeTarget != null && NpcPathingPolicy.IsValidDestination(runtimeTarget.position))
                 {
                     _lastKnownPlayerPosition = runtimeTarget.position;
                     _hasLastKnownPlayerPosition = true;
-                    SetAgentDestination(runtimeTarget.position, "Chasing");
+                    NpcPathState pathState = GetPathStateForRecovery();
+                    ObserveChasePath(targetAvailable: true, pathState: pathState);
+                    TrySetAgentDestination(
+                        runtimeTarget.position,
+                        "Chasing",
+                        PathNeedsRepair(pathState));
+
+                    if (TryRecoverChaseToRoaming("target path remained unavailable"))
+                    {
+                        return;
+                    }
 
                     float distanceToPlayer = Vector3.Distance(transform.position, runtimeTarget.position);
                     if (!hasCaughtPlayer && !IsInPostLieMinigameGracePeriod() && distanceToPlayer <= catchDistance)
@@ -751,28 +869,83 @@ namespace Game.Systems
                         return;
                     }
                 }
+                else
+                {
+                    UpdateLostTargetChase();
+                }
             }
             else
             {
-                _losePlayerTimer += Time.deltaTime;
-
-                bool reachedLastKnownPosition = true;
-                if (_hasLastKnownPlayerPosition)
-                {
-                    _isSearchingLastKnownPosition = true;
-                    SetAgentDestination(_lastKnownPlayerPosition, "LastKnownPosition");
-                    reachedLastKnownPosition = HasReachedDestination();
-                }
-
-                if (_losePlayerTimer >= losePlayerDelay && reachedLastKnownPosition)
-                {
-                    _isSearchingLastKnownPosition = false;
-                    _losePlayerTimer = 0f;
-                    _detectionTimer = 0f;
-                    ChangeState(NPCState.Roaming);
-                    return;
-                }
+                UpdateLostTargetChase();
             }
+        }
+
+        private void UpdateLostTargetChase()
+        {
+            _losePlayerTimer += Time.deltaTime;
+            NpcPathState pathState = GetPathStateForRecovery();
+            ObserveChasePath(targetAvailable: false, pathState: pathState);
+
+            bool reachedLastKnownPosition = false;
+            if (_hasLastKnownPlayerPosition
+                && NpcPathingPolicy.IsValidDestination(_lastKnownPlayerPosition))
+            {
+                _isSearchingLastKnownPosition = true;
+                TrySetAgentDestination(
+                    _lastKnownPlayerPosition,
+                    "LastKnownPosition",
+                    PathNeedsRepair(pathState));
+                reachedLastKnownPosition = HasReachedDestination();
+            }
+            else
+            {
+                _isSearchingLastKnownPosition = false;
+                StopAgent();
+            }
+
+            if (_losePlayerTimer >= losePlayerDelay && reachedLastKnownPosition)
+            {
+                ExitChaseToRoaming("reached last known position");
+                return;
+            }
+
+            TryRecoverChaseToRoaming("target or path recovery timed out");
+        }
+
+        private void ObserveChasePath(bool targetAvailable, NpcPathState pathState)
+        {
+            _pathRecoveryTracker.Tick(
+                Time.deltaTime,
+                targetAvailable,
+                pathState,
+                _offMeshLinkTraversal.IsActive);
+            if (pathState == NpcPathState.Complete)
+            {
+                _pathRecoveryTracker.RecordValidPath();
+            }
+        }
+
+        private bool TryRecoverChaseToRoaming(string reason)
+        {
+            bool schedulerExhausted = _repathScheduler.ConsecutiveFailures
+                                      >= NpcPathingPolicy.MaximumConsecutiveFailures;
+            if (!schedulerExhausted && !_pathRecoveryTracker.TryIssueRecovery())
+            {
+                return false;
+            }
+
+            ExitChaseToRoaming(reason);
+            return true;
+        }
+
+        private void ExitChaseToRoaming(string reason)
+        {
+            _isSearchingLastKnownPosition = false;
+            _hasLastKnownPlayerPosition = false;
+            _losePlayerTimer = 0f;
+            _detectionTimer = 0f;
+            Log($"Chase recovery to Roaming: {reason}.");
+            ChangeState(NPCState.Roaming);
         }
 
         private bool DetectPlayer()
@@ -1273,6 +1446,7 @@ namespace Game.Systems
         public void ResetAfterMinigame()
         {
             CancelOffMeshLinkTraversal();
+            ResetNpcPathingLifecycle();
             hasCaughtPlayer = false;
             triggeredMinigame = false;
             _awaitingMinigameEnd = false;
@@ -1399,6 +1573,7 @@ namespace Game.Systems
         private void StartPostLieFailSequence()
         {
             CancelOffMeshLinkTraversal();
+            ResetNpcPathingLifecycle();
             triggeredMinigame = false;
             hasCaughtPlayer = false;
             _awaitingMinigameEnd = false;
@@ -1450,16 +1625,19 @@ namespace Game.Systems
             _postLieMinigameGraceTimer = 0f;
             _losePlayerTimer = 0f;
             _isSearchingLastKnownPosition = false;
+            ChangeState(NPCState.Chasing);
 
             Transform runtimeTarget = GetRuntimeTargetTransform();
-            if (runtimeTarget != null)
+            if (runtimeTarget != null && NpcPathingPolicy.IsValidDestination(runtimeTarget.position))
             {
                 _lastKnownPlayerPosition = runtimeTarget.position;
                 _hasLastKnownPlayerPosition = true;
-                SetAgentDestination(runtimeTarget.position, "PostLieFailChase");
+                NpcPathState pathState = GetPathStateForRecovery();
+                TrySetAgentDestination(
+                    runtimeTarget.position,
+                    "PostLieFailChase",
+                    PathNeedsRepair(pathState));
             }
-
-            ChangeState(NPCState.Chasing);
         }
 
         private void UpdatePostLieFailChasePhase()
@@ -1473,7 +1651,7 @@ namespace Game.Systems
             }
 
             Transform runtimeTarget = GetRuntimeTargetTransform();
-            if (runtimeTarget == null)
+            if (runtimeTarget == null || !NpcPathingPolicy.IsValidDestination(runtimeTarget.position))
             {
                 StopAgent();
                 return;
@@ -1481,7 +1659,11 @@ namespace Game.Systems
 
             _lastKnownPlayerPosition = runtimeTarget.position;
             _hasLastKnownPlayerPosition = true;
-            SetAgentDestination(runtimeTarget.position, "PostLieFailChase");
+            NpcPathState pathState = GetPathStateForRecovery();
+            TrySetAgentDestination(
+                runtimeTarget.position,
+                "PostLieFailChase",
+                PathNeedsRepair(pathState));
 
             float distanceToPlayer = Vector3.Distance(transform.position, runtimeTarget.position);
             if (distanceToPlayer <= catchDistance)
@@ -2034,17 +2216,18 @@ namespace Game.Systems
             }
         }
 
-        private void TryPickRoamTarget()
+        private bool TryPickRoamTarget()
         {
             if (_offMeshLinkTraversal.IsActive)
             {
-                return;
+                return false;
             }
 
             if (!EnsureAgentOnNavMesh())
             {
                 _hasRoamTarget = false;
-                return;
+                _roamingRetryState.RecordFailure(Time.time);
+                return false;
             }
 
             int areaMask = _agent != null ? _agent.areaMask : NavMesh.AllAreas;
@@ -2053,14 +2236,15 @@ namespace Game.Systems
             if (!TryGetAgentNavPosition(areaMask, out Vector3 agentNavPosition))
             {
                 _hasRoamTarget = false;
-                return;
+                _roamingRetryState.RecordFailure(Time.time);
+                return false;
             }
 
             Vector3 selected = agentNavPosition;
             bool found = false;
             NavMeshPath candidatePath = new NavMeshPath();
 
-            for (int i = 0; i < RoamTargetAttempts; i++)
+            for (int i = 0; i < NpcPathingPolicy.MaximumRoamTargetAttempts; i++)
             {
                 Vector2 randomOffset = Random.insideUnitCircle * roamRadius;
                 Vector3 candidate = _spawnPosition + new Vector3(randomOffset.x, 0f, randomOffset.y);
@@ -2120,15 +2304,28 @@ namespace Game.Systems
             _hasRoamTarget = found;
             _isRoamPaused = false;
             _idleTimer = 0f;
+            _roamingPathIssueElapsed = 0f;
 
             if (_hasRoamTarget)
             {
+                _roamingRetryState.RecordSuccess();
                 SetAgentDestination(_roamTarget, "Roaming");
             }
+            else
+            {
+                _roamingRetryState.RecordFailure(Time.time);
+            }
+
+            return found;
         }
 
         private void ChangeState(NPCState nextState)
         {
+            if (!CanRunAuthoritativeUpdate())
+            {
+                return;
+            }
+
             if (_state == nextState)
             {
                 if (nextState == NPCState.Idle)
@@ -2141,6 +2338,16 @@ namespace Game.Systems
 
             NPCState previous = _state;
             _state = nextState;
+            _repathScheduler.Reset();
+            _pathRecoveryTracker.Reset();
+            _roamingRetryState.Reset();
+            _roamingPathIssueElapsed = 0f;
+
+            if (_state != NPCState.Roaming)
+            {
+                _hasRoamTarget = false;
+                _isRoamPaused = false;
+            }
 
             if (!DoesCurrentStateAllowMovement())
             {
@@ -2192,24 +2399,48 @@ namespace Game.Systems
             return true;
         }
 
-        private void SetAgentDestination(Vector3 destination, string reason)
+        private bool SetAgentDestination(Vector3 destination, string reason)
         {
-            if (_offMeshLinkTraversal.IsActive)
+            return TrySetAgentDestination(destination, reason, pathNeedsRepair: false);
+        }
+
+        private bool TrySetAgentDestination(
+            Vector3 destination,
+            string reason,
+            bool pathNeedsRepair)
+        {
+            bool agentExists = _agent != null;
+            bool agentEnabled = agentExists && _agent.enabled && _agent.gameObject.activeInHierarchy;
+            bool agentOnNavMesh = agentEnabled && _agent.isOnNavMesh;
+            NpcRepathRequest request = new NpcRepathRequest(
+                agentExists,
+                agentEnabled,
+                agentOnNavMesh,
+                CanRunAuthoritativeUpdate(),
+                DoesCurrentStateAllowMovement(),
+                _offMeshLinkTraversal.IsActive,
+                pathNeedsRepair,
+                destination,
+                Time.time,
+                Time.frameCount);
+            if (!_repathScheduler.CanRequest(request))
             {
-                return;
+                return false;
             }
 
             if (!EnsureAgentOnNavMesh())
             {
-                return;
+                return false;
             }
 
             _agent.stoppingDistance = Mathf.Max(0f, stoppingDistance);
             _agent.isStopped = false;
             bool destinationSet = _agent.SetDestination(destination);
+            _repathScheduler.RecordAttempt(request, destinationSet);
 
             if (destinationSet)
             {
+                _pathRecoveryTracker.RecordDestinationAccepted();
                 if (!_hasLastLoggedDestination || Vector3.Distance(_lastLoggedDestination, destination) > 0.15f)
                 {
                     Log($"{reason} destination set: {destination}");
@@ -2219,8 +2450,11 @@ namespace Game.Systems
             }
             else
             {
+                _pathRecoveryTracker.RecordDestinationFailure();
                 Log($"{reason} destination failed: {destination}");
             }
+
+            return destinationSet;
         }
 
         private bool HasReachedDestination()
@@ -2232,20 +2466,19 @@ namespace Game.Systems
 
             if (!EnsureAgentOnNavMesh())
             {
-                return true;
-            }
-
-            if (_agent.pathPending)
-            {
                 return false;
             }
 
-            if (_agent.pathStatus == NavMeshPathStatus.PathInvalid || _agent.pathStatus == NavMeshPathStatus.PathPartial)
-            {
-                return false;
-            }
-
-            bool reached = _agent.remainingDistance <= stoppingDistance;
+            bool reached = NpcPathingPolicy.IsArrival(new NpcArrivalSnapshot(
+                true,
+                _agent.enabled,
+                _agent.isOnNavMesh,
+                _agent.pathPending,
+                _agent.hasPath,
+                GetCurrentPathState(),
+                _agent.remainingDistance,
+                stoppingDistance,
+                _agent.velocity.magnitude));
             if (reached)
             {
                 _agent.isStopped = true;
@@ -2300,7 +2533,7 @@ namespace Game.Systems
 
         private bool ShouldRefreshRoamDestination()
         {
-            if (_offMeshLinkTraversal.IsActive || _agent == null)
+            if (_offMeshLinkTraversal.IsActive || !EnsureAgentOnNavMesh())
             {
                 return false;
             }
@@ -2320,7 +2553,55 @@ namespace Game.Systems
                 return true;
             }
 
-            return Vector3.Distance(_agent.destination, _roamTarget) > DestinationRefreshThreshold;
+            float destinationDelta = Vector3.Distance(_agent.destination, _roamTarget);
+            return !NpcPathingPolicy.IsFinite(destinationDelta)
+                   || destinationDelta > DestinationRefreshThreshold;
+        }
+
+        private NpcPathState GetCurrentPathState()
+        {
+            if (!EnsureAgentOnNavMesh())
+            {
+                return NpcPathState.None;
+            }
+
+            if (_agent.pathPending)
+            {
+                return NpcPathState.Pending;
+            }
+
+            switch (_agent.pathStatus)
+            {
+                case NavMeshPathStatus.PathComplete:
+                    return NpcPathState.Complete;
+                case NavMeshPathStatus.PathPartial:
+                    return NpcPathState.Partial;
+                case NavMeshPathStatus.PathInvalid:
+                default:
+                    return NpcPathState.Invalid;
+            }
+        }
+
+        private NpcPathState GetPathStateForRecovery()
+        {
+            NpcPathState state = GetCurrentPathState();
+            return state == NpcPathState.None ? NpcPathState.Invalid : state;
+        }
+
+        private static bool PathNeedsRepair(NpcPathState pathState)
+        {
+            return pathState == NpcPathState.None
+                   || pathState == NpcPathState.Partial
+                   || pathState == NpcPathState.Invalid;
+        }
+
+        private void InvalidateRoamingTargetForRetry()
+        {
+            StopAgent();
+            _hasRoamTarget = false;
+            _roamingPathIssueElapsed = 0f;
+            _repathScheduler.Reset();
+            _roamingRetryState.RecordFailure(Time.time);
         }
 
         private bool TryGetAgentNavPosition(int areaMask, out Vector3 navPosition)

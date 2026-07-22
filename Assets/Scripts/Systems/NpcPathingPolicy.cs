@@ -271,6 +271,11 @@ namespace Game.Systems
             ConsecutiveFailures++;
         }
 
+        public void RecordDestinationAccepted()
+        {
+            ConsecutiveFailures = 0;
+        }
+
         public void RecordValidPath()
         {
             ConsecutiveFailures = 0;
