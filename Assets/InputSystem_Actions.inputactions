@@ -402,17 +402,6 @@
                                       },
                                       {
                                           "name":  "",
-                                          "id":  "cbac6039-9c09-46a1-b5f2-4e5124ccb5ed",
-                                          "path":  "\u003cKeyboard\u003e/2",
-                                          "interactions":  "",
-                                          "processors":  "",
-                                          "groups":  "Keyboard\u0026Mouse",
-                                          "action":  "Next",
-                                          "isComposite":  false,
-                                          "isPartOfComposite":  false
-                                      },
-                                      {
-                                          "name":  "",
                                           "id":  "e15ca19d-e649-4852-97d5-7fe8ccc44e94",
                                           "path":  "\u003cGamepad\u003e/dpad/right",
                                           "interactions":  "",
@@ -485,17 +474,6 @@
                                           "processors":  "",
                                           "groups":  "XR",
                                           "action":  "Jump",
-                                          "isComposite":  false,
-                                          "isPartOfComposite":  false
-                                      },
-                                      {
-                                          "name":  "",
-                                          "id":  "1534dc16-a6aa-499d-9c3a-22b47347b52a",
-                                          "path":  "\u003cKeyboard\u003e/1",
-                                          "interactions":  "",
-                                          "processors":  "",
-                                          "groups":  "Keyboard\u0026Mouse",
-                                          "action":  "Previous",
                                           "isComposite":  false,
                                           "isPartOfComposite":  false
                                       },
