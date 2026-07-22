@@ -177,6 +177,106 @@ public sealed class MinigameCanvasAssetTests
         Assert.That(source, Does.Match(@"(?s)private void OnDisable\(\).*?ClearAssignedUiText\(\);"));
     }
 
+    [Test]
+    public void CleaningWorldStainColor_DoesNotInstantiateRendererMaterial()
+    {
+        CleaningMinigame minigame = CreateObject("Cleaning.MaterialTest").AddComponent<CleaningMinigame>();
+        GameObject stainVisual = GameObject.CreatePrimitive(PrimitiveType.Cylinder);
+        _transientObjects.Add(stainVisual);
+        Renderer renderer = stainVisual.GetComponent<Renderer>();
+        Material sharedMaterial = renderer.sharedMaterial;
+
+        Type stainStateType = typeof(CleaningMinigame).GetNestedType(
+            "WorldStainState",
+            BindingFlags.NonPublic);
+        Assert.That(stainStateType, Is.Not.Null);
+        object stainState = Activator.CreateInstance(stainStateType);
+        FieldInfo rendererField = stainStateType.GetField("MarkerRenderer", BindingFlags.Instance | BindingFlags.Public);
+        Assert.That(rendererField, Is.Not.Null);
+        rendererField.SetValue(stainState, renderer);
+
+        Color expectedColor = new Color(0.35f, 0.2f, 0.1f, 1f);
+        InvokePrivate(minigame, "ApplyWorldStainColor", stainState, expectedColor);
+
+        Assert.That(renderer.sharedMaterial, Is.SameAs(sharedMaterial));
+        MaterialPropertyBlock propertyBlock = new MaterialPropertyBlock();
+        renderer.GetPropertyBlock(propertyBlock);
+        Color appliedColor = propertyBlock.GetColor(Shader.PropertyToID("_BaseColor"));
+        Assert.That(appliedColor.r, Is.EqualTo(expectedColor.r).Within(0.0001f));
+        Assert.That(appliedColor.g, Is.EqualTo(expectedColor.g).Within(0.0001f));
+        Assert.That(appliedColor.b, Is.EqualTo(expectedColor.b).Within(0.0001f));
+        Assert.That(appliedColor.a, Is.EqualTo(expectedColor.a).Within(0.0001f));
+    }
+
+    [Test]
+    public void CleaningTimerUi_DoesNotReplaceTextUntilDisplayedSecondChanges()
+    {
+        CleaningMinigame minigame = CreateObject("Cleaning.TimerTest").AddComponent<CleaningMinigame>();
+        TextMeshProUGUI timerText = CreateObject(
+            "Cleaning.TimerText",
+            typeof(RectTransform),
+            typeof(CanvasRenderer)).AddComponent<TextMeshProUGUI>();
+        SetPrivateField(minigame, "_timerText", timerText);
+        SetPrivateField(minigame, "_remainingTimeSeconds", 17.4f);
+
+        InvokePrivate(minigame, "UpdateTimerUI");
+        string firstTextInstance = timerText.text;
+        InvokePrivate(minigame, "UpdateTimerUI");
+
+        Assert.That(timerText.text, Is.SameAs(firstTextInstance));
+
+        SetPrivateField(minigame, "_remainingTimeSeconds", 16.4f);
+        InvokePrivate(minigame, "UpdateTimerUI");
+        Assert.That(timerText.text, Is.EqualTo("Time: 17s"));
+    }
+
+    [Test]
+    public void WeldingMarkerColor_DoesNotInstantiateRendererMaterial()
+    {
+        WeldingFillMinigame minigame = CreateObject("Welding.MaterialTest").AddComponent<WeldingFillMinigame>();
+        GameObject markerVisual = GameObject.CreatePrimitive(PrimitiveType.Cube);
+        _transientObjects.Add(markerVisual);
+        Renderer renderer = markerVisual.GetComponent<Renderer>();
+        Material sharedMaterial = renderer.sharedMaterial;
+
+        InvokePrivate(minigame, "SetMarkerRendererColor", renderer, Color.cyan);
+
+        Assert.That(renderer.sharedMaterial, Is.SameAs(sharedMaterial));
+        FieldInfo propertyBlockField = typeof(WeldingFillMinigame).GetField(
+            "_markerPropertyBlock",
+            BindingFlags.Instance | BindingFlags.NonPublic);
+        Assert.That(propertyBlockField, Is.Not.Null);
+        Assert.That(propertyBlockField.GetValue(minigame), Is.Not.Null);
+    }
+
+    [Test]
+    public void LieAttemptsUi_DoesNotReplaceTextUntilAttemptCountChanges()
+    {
+        LieMinigame lieMinigame = CreateObject("Lie.PerformanceTest").AddComponent<LieMinigame>();
+        SetPrivateField(lieMinigame, "_maxAttempts", 3);
+        SetPrivateField(lieMinigame, "_attemptsRemaining", 3);
+
+        GameObject uiObject = CreateObject("Lie.UiPerformanceTest");
+        uiObject.SetActive(false);
+        LieMinigameUI ui = uiObject.AddComponent<LieMinigameUI>();
+        TextMeshProUGUI attemptsText = CreateObject(
+            "Lie.AttemptsText",
+            typeof(RectTransform),
+            typeof(CanvasRenderer)).AddComponent<TextMeshProUGUI>();
+        SetPrivateField(ui, "_lieMinigame", lieMinigame);
+        SetPrivateField(ui, "_attemptsText", attemptsText);
+
+        InvokePrivate(ui, "UpdateAttemptsDisplay");
+        string firstTextInstance = attemptsText.text;
+        InvokePrivate(ui, "UpdateAttemptsDisplay");
+
+        Assert.That(attemptsText.text, Is.SameAs(firstTextInstance));
+
+        SetPrivateField(lieMinigame, "_attemptsRemaining", 2);
+        InvokePrivate(ui, "UpdateAttemptsDisplay");
+        Assert.That(attemptsText.text, Is.EqualTo("Attempts: 1/3"));
+    }
+
     private CleaningMinigame CreateCleaningMinigame(out TextMeshProUGUI toolText)
     {
         GameObject minigameObject = CreateObject("Cleaning.Runtime");

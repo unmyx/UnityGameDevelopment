@@ -22,6 +22,8 @@ namespace Game.Minigames
             public OilStainView StainView;
             public float HitRadiusWorld;
             public CleaningStainProgress Progress;
+            public Color AppliedColor;
+            public bool HasAppliedColor;
             public bool IsCleaned => Progress == null || Progress.IsComplete;
         }
 
@@ -30,6 +32,8 @@ namespace Game.Minigames
         private const float StainSurfaceOffset = 0.006f;
         private const float DefaultTimeLimitSeconds = 30f;
         private const int DefaultTimeoutCurrencyPenalty = 10;
+        private static readonly int BaseColorPropertyId = Shader.PropertyToID("_BaseColor");
+        private static readonly int ColorPropertyId = Shader.PropertyToID("_Color");
 
         [SerializeField]
         private bool _lockCursorDuringMinigame = true;
@@ -78,6 +82,7 @@ namespace Game.Minigames
         private readonly List<Transform> _worldSpawnSurfaces = new List<Transform>(8);
         private readonly List<Bounds> _worldSpawnSurfaceBounds = new List<Bounds>(8);
         private readonly List<Collider[]> _worldSpawnSurfaceColliders = new List<Collider[]>(8);
+        private MaterialPropertyBlock _stainPropertyBlock;
         private int _totalStains;
         private int _cleanedStains;
         private bool _isInitialized;
@@ -109,6 +114,10 @@ namespace Game.Minigames
         private TextMeshProUGUI _progressText;
         private TextMeshProUGUI _toolText;
         private bool _hasProcessedTimeoutFailure;
+        private int _lastDisplayedTimerSeconds = int.MinValue;
+        private int _lastDisplayedCleanedStains = int.MinValue;
+        private int _lastDisplayedTotalStains = int.MinValue;
+        private float _lastDisplayedProgress = -1f;
 
         private CursorLockMode _previousCursorLockMode;
         private bool _previousCursorVisible;
@@ -150,6 +159,7 @@ namespace Game.Minigames
             _strokeTracker.Reset();
             _resultGate.Reset();
             _hasPreviousPointerRay = false;
+            ResetUiDisplayCache();
 
             ConfigureAssignedTimerUI();
             ConfigureAssignedProgressUI();
@@ -753,18 +763,7 @@ namespace Game.Minigames
             }
 
             Renderer primaryRenderer = sphereObject.GetComponent<Renderer>();
-            if (primaryRenderer != null)
-            {
-                Material stainMaterial = primaryRenderer.material;
-                if (stainMaterial != null)
-                {
-                    Color visibleOilColor = _worldStainDirtyColor;
-                    visibleOilColor.a = 1f;
-                    stainMaterial.color = visibleOilColor;
-                }
-            }
-
-            return new WorldStainState
+            WorldStainState stainState = new WorldStainState
             {
                 Id = worldStainId,
                 MarkerTransform = stainObject.transform,
@@ -773,6 +772,11 @@ namespace Game.Minigames
                 HitRadiusWorld = Mathf.Max(0.01f, stainDiameter * 0.55f),
                 Progress = new CleaningStainProgress(ActiveTool)
             };
+
+            Color visibleOilColor = _worldStainDirtyColor;
+            visibleOilColor.a = 1f;
+            ApplyWorldStainColor(stainState, visibleOilColor);
+            return stainState;
         }
 
         private static float GetPlanarMinAxisByNormal(Vector3 surfaceNormal, Vector3 boundsSize)
@@ -1070,15 +1074,9 @@ namespace Game.Minigames
                 return;
             }
 
-            Material material = stain.MarkerRenderer.material;
-            if (material == null)
-            {
-                return;
-            }
-
             if (stain.IsCleaned)
             {
-                material.color = _worldStainCleanColor;
+                ApplyWorldStainColor(stain, _worldStainCleanColor);
                 return;
             }
 
@@ -1086,7 +1084,24 @@ namespace Game.Minigames
                 _worldStainDirtyColor,
                 _worldStainCleanColor,
                 stain.Progress.Progress01 * 0.45f);
-            material.color = isHovered ? _worldStainHoverColor : baseColor;
+            ApplyWorldStainColor(stain, isHovered ? _worldStainHoverColor : baseColor);
+        }
+
+        private void ApplyWorldStainColor(WorldStainState stain, Color color)
+        {
+            if (stain?.MarkerRenderer == null
+                || (stain.HasAppliedColor && stain.AppliedColor == color))
+            {
+                return;
+            }
+
+            _stainPropertyBlock ??= new MaterialPropertyBlock();
+            _stainPropertyBlock.Clear();
+            _stainPropertyBlock.SetColor(BaseColorPropertyId, color);
+            _stainPropertyBlock.SetColor(ColorPropertyId, color);
+            stain.MarkerRenderer.SetPropertyBlock(_stainPropertyBlock);
+            stain.AppliedColor = color;
+            stain.HasAppliedColor = true;
         }
 
         private Camera GetWorldTargetingCamera()
@@ -1666,6 +1681,12 @@ namespace Game.Minigames
             }
 
             int secondsLeft = Mathf.CeilToInt(_remainingTimeSeconds);
+            if (_lastDisplayedTimerSeconds == secondsLeft)
+            {
+                return;
+            }
+
+            _lastDisplayedTimerSeconds = secondsLeft;
             _timerText.text = $"Time: {secondsLeft}s";
             _timerText.color = _remainingTimeSeconds <= 5f ? Color.red : Color.white;
         }
@@ -1679,14 +1700,40 @@ namespace Game.Minigames
 
             if (_totalStains <= 0)
             {
+                if (_lastDisplayedTotalStains == 0)
+                {
+                    return;
+                }
+
+                _lastDisplayedCleanedStains = 0;
+                _lastDisplayedTotalStains = 0;
+                _lastDisplayedProgress = 0f;
                 _progressText.text = "Cleaned: 0/0";
                 _progressText.color = Color.white;
                 return;
             }
 
             float progress01 = CalculateOverallPassProgress();
+            if (_lastDisplayedCleanedStains == _cleanedStains
+                && _lastDisplayedTotalStains == _totalStains
+                && Mathf.Approximately(_lastDisplayedProgress, progress01))
+            {
+                return;
+            }
+
+            _lastDisplayedCleanedStains = _cleanedStains;
+            _lastDisplayedTotalStains = _totalStains;
+            _lastDisplayedProgress = progress01;
             _progressText.text = $"Cleaned: {_cleanedStains}/{_totalStains}  Progress: {progress01:P0}";
             _progressText.color = Color.Lerp(Color.white, new Color(1f, 0.85f, 0.55f, 1f), progress01);
+        }
+
+        private void ResetUiDisplayCache()
+        {
+            _lastDisplayedTimerSeconds = int.MinValue;
+            _lastDisplayedCleanedStains = int.MinValue;
+            _lastDisplayedTotalStains = int.MinValue;
+            _lastDisplayedProgress = -1f;
         }
 
         private float CalculateOverallPassProgress()

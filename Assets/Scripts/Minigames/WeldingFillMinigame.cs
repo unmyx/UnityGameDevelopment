@@ -35,7 +35,7 @@ namespace Game.Minigames
         private readonly WeldInputHandler _inputHandler = new WeldInputHandler();
         private readonly List<WeldAnchorState> _activeWorldAnchors = new List<WeldAnchorState>(8);
         private readonly List<Transform> _candidateWorldAnchors = new List<Transform>(16);
-        private readonly MaterialPropertyBlock _markerPropertyBlock = new MaterialPropertyBlock();
+        private MaterialPropertyBlock _markerPropertyBlock;
 
         [Header("Canvas References")]
         [SerializeField] private Canvas _minigameCanvas;
@@ -541,6 +541,7 @@ namespace Game.Minigames
                 return;
             }
 
+            _markerPropertyBlock ??= new MaterialPropertyBlock();
             _markerPropertyBlock.Clear();
             _markerPropertyBlock.SetColor(BaseColorPropertyId, color);
             _markerPropertyBlock.SetColor(ColorPropertyId, color);
